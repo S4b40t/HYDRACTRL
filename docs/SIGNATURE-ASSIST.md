@@ -25,3 +25,22 @@ The v0.1 resolver uses the 76 function records in [the app’s Hydra catalog](..
 ## Reproduce in Chromium
 
 Start `bun run dev`, then run `node scripts/signature-assist-smoke.mjs` from the repository root. Set `CHROMIUM` or `HYDRACTRL_URL` to override the browser binary or app URL. Set `SIGNATURE_SCREENSHOT` and `SIGNATURE_NARROW_SCREENSHOT` to save screenshots of the default view and the light theme at the editor’s minimum panel width. The script checks auto-run and observes WebGL calls with the plugin installed and removed. It does not measure typing latency or frame timing.
+
+## Custom Setup and Sketch helpers
+
+v0.2 supports top-level `function` declarations and arrow functions or function expressions directly assigned in `var`, `let`, or `const` declarations. Single-argument arrows, empty lists, defaults, rest parameters, and destructuring are supported. The tooltip displays the original parameter source, including defaults, without evaluating expressions. Additional positional arguments continue to highlight a final rest parameter.
+
+- The plugin uses the current texts from both editor tabs. An unchanged inactive tab is parsed once and its index is reused. The active tab uses CodeMirror’s syntax tree and is indexed when its text changes and signature lookup needs it. An incomplete background parse temporarily suppresses hints that would require an unverified binding index. All parser work stays outside the renderer and sketch runner.
+- The runtime concatenates Setup before Sketch in one function body. The index treats function declarations as hoisted across both tabs. A variable-bound signature is offered after its initializer in the current tab, or in Sketch if its initializer is in Setup. Write each tab as self-contained JavaScript and use explicit statement terminators when leading Sketch syntax could continue a Setup expression. The index does not follow code that spans the tab boundary or infer when callbacks run.
+- A single supported declaration wins over the native catalog. Duplicate or non-function bindings, malformed declarations, and visible assignments suppress hints for that name. A matching nested binding suppresses lookup within its enclosing function, without resolving narrower block scopes. Nested bindings outside a function and visible writes are treated conservatively across the whole script. These rules can suppress some valid hints. Dynamic writes such as `globalThis[name] = ...`, Unicode-escaped identifiers, aliases, and factory-generated functions are outside static discovery.
+- A binding that shadows a native generator, source, or audio object also suppresses its native receiver-chain hints. A normal native call remains available when no matching binding is found.
+
+For manual verification, paste this into Setup and switch to Sketch without pressing Run or Save.
+
+```js
+var clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+function lerp(a, b, t) { return a + (b - a) * t; }
+const tide = (period, amplitude = 1) => Math.sin(time * 2 * Math.PI / period) * amplitude;
+```
+
+Type `clamp(0.5,` to highlight **min**, `lerp(0, 1,` to highlight **t**, or `tide(20,` to highlight **amplitude = 1**. Edit the default in Setup and return to Sketch to see it update. The browser smoke script also verifies discovery after clearing persisted Setup storage, along with nested custom and native calls, slot changes, and existing editor interactions. Set `SIGNATURE_CUSTOM_SCREENSHOT` to capture the `clamp` example.

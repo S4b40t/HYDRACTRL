@@ -136,6 +136,64 @@ try {
   await page.locator("body").press("Escape");
   await page.locator("body.ui-hidden").waitFor({ state: "detached" });
 
+  const setupTab = page.locator('[data-tab="setup"]');
+  const sketchTab = page.locator('[data-tab="main"]');
+  const setup = [
+    "var clamp = (value, min, max) => Math.min(Math.max(value, min), max)",
+    "function lerp(a, b, t) { return a + (b - a) * t }",
+    "const tide = (period, amplitude = 1) => Math.sin(time * 2 * Math.PI / period) * amplitude",
+  ].join("\n");
+  await setupTab.click();
+  await replace(`${setup}\nclamp(0.5,`);
+  await expectParameter("min", "clamp(value, min, max)");
+  await replace(setup);
+  await sketchTab.click();
+  // Switching tabs normally persists Setup. Prove discovery uses tab text even without storage.
+  await page.evaluate(() => localStorage.removeItem("hydractrl-setup-code"));
+  await replace("clamp(0.5,");
+  await expectParameter("min", "clamp(value, min, max)");
+  if (process.env.SIGNATURE_CUSTOM_SCREENSHOT) {
+    await page.screenshot({ path: process.env.SIGNATURE_CUSTOM_SCREENSHOT });
+  }
+  await replace("lerp(0, 1,");
+  await expectParameter("t", "lerp(a, b, t)");
+  await replace("tide(20,");
+  await expectParameter("amplitude = 1", "tide(period, amplitude = 1)");
+  await setupTab.click();
+  await replace(setup.replaceAll("amplitude", "depth").replace("depth = 1", "depth = 2"));
+  await sketchTab.click();
+  await replace("osc(tide(20,");
+  await expectParameter("depth = 2", "tide(period, depth = 2)");
+  await page.keyboard.insertText(" 2),");
+  await expectParameter("sync = 0.1");
+  await editor.press("Escape");
+  await tip.waitFor({ state: "hidden" });
+
+  await setupTab.click();
+  await replace(setup.replace("const tide", "const wave"));
+  await sketchTab.click();
+  await replace("tide(20,");
+  await tip.waitFor({ state: "hidden" });
+  await replace("wave(20,");
+  await expectParameter("amplitude = 1", "wave(period, amplitude = 1)");
+  await replace("const local = (left, right) => left; local(1,");
+  await expectParameter("right", "local(left, right)");
+  await replace("const local = (left, edited = 1) => left; local(1,");
+  await expectParameter("edited = 1", "local(left, edited = 1)");
+  await page.locator('.slot[data-index="2"]').click();
+  await replace("local(1,");
+  await tip.waitFor({ state: "hidden" });
+  await replace("clamp(0.5,");
+  await expectParameter("min", "clamp(value, min, max)");
+  await replace("function osc(custom) {} osc(");
+  await expectParameter("custom", "osc(custom)");
+  await replace("function osc(custom) {} osc().rotate(");
+  await tip.waitFor({ state: "hidden" });
+  await replace("const clamp = factory(); clamp(");
+  await tip.waitFor({ state: "hidden" });
+  await replace("osc(60,");
+  await expectParameter("sync = 0.1");
+
   await page.evaluate(() => {
     window.testRuns = [];
     window.hydractrl.events.on("sketch:run", ({ main }) => window.testRuns.push(main));
@@ -171,7 +229,7 @@ try {
 
   assert.deepEqual(errors, []);
   console.log(
-    "Passed signature, nesting, autocomplete, tab, slot, visibility, disposal and auto-run checks.",
+    "Passed native and custom signatures, unsaved edits, nesting, autocomplete, tab, slot, visibility, disposal and auto-run checks.",
   );
 } finally {
   await browser.close();

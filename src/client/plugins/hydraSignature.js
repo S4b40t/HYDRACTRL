@@ -57,12 +57,14 @@ function chainMatches(state, receiver, methods, rootMatches) {
   return rootMatches(node);
 }
 
-function callableName(state, args) {
+function callableSignature(state, args, custom) {
   const callee = args.parent.firstChild;
   if (args.parent.getChild("?.")) return null;
   if (callee.name === "VariableName") {
     const name = state.sliceDoc(callee.from, callee.to);
-    return generators.has(name) || helpers.has(name) ? name : null;
+    const params = custom(name, callee.from);
+    if (params !== undefined) return params && { name, params };
+    return generators.has(name) || helpers.has(name) ? nativeSignature(name) : null;
   }
 
   const name = memberName(state, callee);
@@ -70,30 +72,34 @@ function callableName(state, args) {
   const receiver = callee.firstChild;
   if (receiver.name === "VariableName") {
     const binding = state.sliceDoc(receiver.from, receiver.to);
-    if (sources.has(name) && /^s[0-3]$/.test(binding)) return name;
-    if (audio.has(name) && binding === "a") return name;
+    if (custom(binding, receiver.from) !== undefined) return null;
+    if (sources.has(name) && /^s[0-3]$/.test(binding)) return nativeSignature(name);
+    if (audio.has(name) && binding === "a") return nativeSignature(name);
   }
   if (
     textures.has(name) &&
-    chainMatches(
-      state,
-      receiver,
-      textures,
-      (root) => root?.name === "VariableName" && generators.has(state.sliceDoc(root.from, root.to)),
-    ) &&
+    chainMatches(state, receiver, textures, (root) => {
+      if (root?.name !== "VariableName") return false;
+      const binding = state.sliceDoc(root.from, root.to);
+      return generators.has(binding) && custom(binding, root.from) === undefined;
+    }) &&
     receiver.name === "CallExpression"
   )
-    return name;
+    return nativeSignature(name);
   if (
     arrays.has(name) &&
     chainMatches(state, receiver, arrays, (root) => root?.name === "ArrayExpression")
   ) {
-    return name;
+    return nativeSignature(name);
   }
   return null;
 }
 
-export function hydraCallAtCursor(state) {
+function nativeSignature(name) {
+  return { name, params: corrections[name] ?? hydraData.functions[name].params };
+}
+
+export function hydraCallAtCursor(state, custom = () => undefined) {
   const { head, empty } = state.selection.main;
   if (!empty || state.selection.ranges.length !== 1 || !syntaxTreeAvailable(state, head))
     return null;
@@ -106,16 +112,17 @@ export function hydraCallAtCursor(state) {
     if (close?.name === ")" && head >= close.to) continue;
     if (node.parent?.name !== "CallExpression" || node.firstChild?.name !== "(") return null;
 
-    const name = callableName(state, node);
-    if (!name) return null;
+    const signature = callableSignature(state, node, custom);
+    if (!signature) return null;
 
     let active = 0;
     for (let token = node.firstChild; token && token.from < head; token = token.nextSibling) {
       if (token.type.isError || token.name === "Spread") return null;
       if (token.name === "," && token.to <= head) active++;
     }
-    const params = corrections[name] ?? hydraData.functions[name].params;
-    return { name, pos: node.from, active: active < params.length ? active : -1, params };
+    const last = signature.params.at(-1);
+    if (active >= signature.params.length) active = last?.rest ? signature.params.length - 1 : -1;
+    return { ...signature, pos: node.from, active };
   }
   return null;
 }

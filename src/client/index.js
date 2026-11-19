@@ -194,6 +194,8 @@ function initEditor() {
     },
     focus: () => editor.focus(),
     addExtension: editor.addExtension,
+    getCurrentTab: tabs.current,
+    getTabCode: tabs.getTabCode,
     // The code lights up to show it ran; the code overlay flashes with it
     flash: () => {
       editor.flash();
