@@ -139,3 +139,20 @@ test("tooltip state refreshes on description-only edits at the same call positio
   expect(removed.description).toBeUndefined();
   expect(removed.params[0].documentation).toBeUndefined();
 });
+
+test("associates underscore identifiers, including optional and rest spellings", () => {
+  const result = hint(`/**
+ * @param {number} [_value=1] - Optional value.
+ * @param _ - Placeholder.
+ * @param {...string} ..._items - Remaining items.
+ * @param $value - Dollar name.
+ * @param _value.extra - Invalid nested name.
+ */
+ function f(_value = 2, _, $value, ..._items) {}`);
+  expect(result.params).toMatchObject([
+    { name: "_value = 2", documentation: "Optional value." },
+    { name: "_", documentation: "Placeholder." },
+    { name: "$value", documentation: "Dollar name." },
+    { name: "..._items", documentation: "Remaining items.", rest: true },
+  ]);
+});

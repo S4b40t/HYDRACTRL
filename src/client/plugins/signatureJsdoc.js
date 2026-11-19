@@ -1,5 +1,5 @@
 // A deliberately small JSDoc subset for display. Source parameters remain authoritative.
-const paramName = /^(?:\.\.\.)?([$\p{ID_Start}](?:[$\p{ID_Continue}]|\u200c|\u200d)*)$/u;
+const paramName = /^(?:\.\.\.)?([_$\p{ID_Start}](?:[$\p{ID_Continue}]|\u200c|\u200d)*)$/u;
 
 function readParamTag(line) {
   const tag = /^@param\s+(.+)$/.exec(line);
