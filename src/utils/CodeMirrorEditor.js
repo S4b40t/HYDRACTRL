@@ -320,6 +320,9 @@ export function createCodeMirrorEditor(container, initialCode = "") {
     return themeMapping.default;
   }
 
+  const pluginExtensions = new Compartment();
+  const registrations = new Map();
+
   // Create initial editor state
   const startState = EditorState.create({
     doc: initialCode,
@@ -337,6 +340,7 @@ export function createCodeMirrorEditor(container, initialCode = "") {
       EditorState.tabSize.of(2),
       runFlash(), // The code lights up for a moment when it runs
       notifyUpdates,
+      pluginExtensions.of([]),
       preventCtrlEnterHandler, // Add our custom handler
       // Add autocompletion with custom Hydra completions
       autocompletion({
@@ -383,6 +387,22 @@ export function createCodeMirrorEditor(container, initialCode = "") {
       });
     },
     focus: () => view.focus(),
+    addExtension: (extension) => {
+      const registration = Symbol();
+      const reconfigure = () => {
+        view.dispatch({ effects: pluginExtensions.reconfigure([...registrations.values()]) });
+      };
+      registrations.set(registration, extension);
+      try {
+        reconfigure();
+      } catch (error) {
+        registrations.delete(registration);
+        throw error;
+      }
+      return () => {
+        if (registrations.delete(registration)) reconfigure();
+      };
+    },
     // The cursor, as offsets into the code: { anchor, head }
     getSelection: () => {
       const { anchor, head } = view.state.selection.main;
