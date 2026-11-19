@@ -12,6 +12,7 @@ import { EditorView, highlightActiveLineGutter, keymap, lineNumbers } from "@cod
 import { monokai } from "@uiw/codemirror-theme-monokai";
 import { solarizedDark } from "@uiw/codemirror-theme-solarized";
 import hydraData from "../data/hydra-functions.json" assert { type: "json" };
+import { createEditorExtensions } from "./editorExtensions.js";
 import { insertLines } from "./editorInsert.js";
 import { lightEditorTheme, popEditorTheme } from "./editorThemes.js";
 import { flashCode, runFlash } from "./runFlash.js";
@@ -320,8 +321,7 @@ export function createCodeMirrorEditor(container, initialCode = "") {
     return themeMapping.default;
   }
 
-  const pluginExtensions = new Compartment();
-  const registrations = new Map();
+  const pluginExtensions = createEditorExtensions((spec) => view.dispatch(spec));
 
   // Create initial editor state
   const startState = EditorState.create({
@@ -340,7 +340,7 @@ export function createCodeMirrorEditor(container, initialCode = "") {
       EditorState.tabSize.of(2),
       runFlash(), // The code lights up for a moment when it runs
       notifyUpdates,
-      pluginExtensions.of([]),
+      pluginExtensions.extension,
       preventCtrlEnterHandler, // Add our custom handler
       // Add autocompletion with custom Hydra completions
       autocompletion({
@@ -387,22 +387,7 @@ export function createCodeMirrorEditor(container, initialCode = "") {
       });
     },
     focus: () => view.focus(),
-    addExtension: (extension) => {
-      const registration = Symbol();
-      const reconfigure = () => {
-        view.dispatch({ effects: pluginExtensions.reconfigure([...registrations.values()]) });
-      };
-      registrations.set(registration, extension);
-      try {
-        reconfigure();
-      } catch (error) {
-        registrations.delete(registration);
-        throw error;
-      }
-      return () => {
-        if (registrations.delete(registration)) reconfigure();
-      };
-    },
+    addExtension: pluginExtensions.addExtension,
     // The cursor, as offsets into the code: { anchor, head }
     getSelection: () => {
       const { anchor, head } = view.state.selection.main;

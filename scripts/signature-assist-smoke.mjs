@@ -37,52 +37,99 @@ try {
     await page.keyboard.insertText(code);
   }
 
-  async function expectParameter(name) {
-    await active.filter({ hasText: name }).waitFor({ state: "visible" });
-    assert.equal(await active.textContent(), name);
-    assert.equal(await tip.textContent(), "osc(frequency, sync, offset)");
+  const oscillator = "osc(frequency = 60, sync = 0.1, offset = 0)";
+  async function expectParameter(label, signature = oscillator) {
+    await tip.waitFor({ state: "visible" });
+    assert.equal(await tip.textContent(), signature);
+    assert.equal(await active.textContent(), label);
   }
 
   await replace("osc(60,");
-  await expectParameter("sync");
+  await expectParameter("sync = 0.1");
   if (process.env.SIGNATURE_SCREENSHOT) {
     await page.screenshot({ path: process.env.SIGNATURE_SCREENSHOT });
   }
   await editor.press("ArrowLeft");
-  await expectParameter("frequency");
+  await expectParameter("frequency = 60");
   await editor.press("ArrowRight");
-  await expectParameter("sync");
+  await expectParameter("sync = 0.1");
   await page.keyboard.insertText(" 0.1,");
-  await expectParameter("offset");
+  await expectParameter("offset = 0");
   await editor.press("Escape");
   await tip.waitFor({ state: "hidden" });
 
   await replace("osc(osc(60,");
-  await expectParameter("sync");
+  await expectParameter("sync = 0.1");
   await page.keyboard.insertText(" 0.1)");
-  await expectParameter("frequency");
+  await expectParameter("frequency = 60");
   await page.keyboard.insertText(", noi");
-  await expectParameter("sync");
+  await expectParameter("sync = 0.1");
   await editor.press("Control+Space");
   const completion = page.getByRole("option", { name: /noise/ });
   await completion.first().waitFor({ state: "visible" });
-  await expectParameter("sync");
+  await expectParameter("sync = 0.1");
   // CodeMirror ignores acceptance during its initial 75 ms interaction guard.
   await page.waitForTimeout(100);
   await editor.press("Enter");
   assert.match(await editor.innerText(), /noise\(/);
 
+  for (const [code, label, signature] of [
+    ["noise(1,", "offset = 0.1", "noise(scale = 10, offset = 0.1)"],
+    ["shape().rotate(0,", "speed = 0", "rotate(angle = 10, speed = 0)"],
+    ["shape().color(", "r = 1", "color(r = 1, g = 1, b = 1, a = 1)"],
+    ["shape().blend(osc(),", "amount = 0.5", "blend(texture, amount = 0.5)"],
+    ["osc().modulate(noise(),", "amount = 0.1", "modulate(texture, amount = 0.1)"],
+    ["osc().out(", "buffer = o0", "out(buffer = o0)"],
+    ["setResolution(640,", "height", "setResolution(width, height)"],
+    ["s0.initVideo(url,", "params", 'initVideo(url = "", params)'],
+    ["a.setSmooth(", "smooth", "setSmooth(smooth)"],
+    ["[1, 2].fast().fit(0,", "high = 1", "fit(low = 0, high = 1)"],
+  ]) {
+    await replace(code);
+    await expectParameter(label, signature);
+  }
+  for (const code of ["osc(unknown(", "other.rotate(", "a.fft(", "osc(60, @"]) {
+    await replace(code);
+    await tip.waitFor({ state: "hidden" });
+  }
+  await replace("osc(60, 1, 0,");
+  await tip.waitFor({ state: "visible" });
+  assert.equal(await active.count(), 0);
+
+  const panel = page.locator("#editor-container");
+  const oldWidth = await panel.evaluate((element) => element.style.width);
+  await panel.evaluate((element) => {
+    element.style.width = "400px";
+  });
+  await page.locator("body").evaluate((body) => body.classList.add("theme-light"));
+  await replace("osc().scale(1,");
+  await expectParameter(
+    "xMult = 1",
+    "scale(amount = 1.5, xMult = 1, yMult = 1, offsetX = 0.5, offsetY = 0.5)",
+  );
+  const narrowPanel = await panel.boundingBox();
+  assert.ok(narrowPanel.width <= 420, "the editor panel should be narrow");
+  const bounds = await tip.boundingBox();
+  assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= page.viewportSize().width);
+  if (process.env.SIGNATURE_NARROW_SCREENSHOT) {
+    await page.screenshot({ path: process.env.SIGNATURE_NARROW_SCREENSHOT });
+  }
+  await page.locator("body").evaluate((body) => body.classList.remove("theme-light"));
+  await panel.evaluate((element, width) => {
+    element.style.width = width;
+  }, oldWidth);
+
   await replace("osc(60,");
-  await expectParameter("sync");
+  await expectParameter("sync = 0.1");
   await page.locator('[data-tab="setup"]').click();
   await tip.waitFor({ state: "hidden" });
   await page.locator('[data-tab="main"]').click();
   await replace("osc(60,");
-  await expectParameter("sync");
+  await expectParameter("sync = 0.1");
   await page.locator('.slot[data-index="1"]').click();
   await tip.waitFor({ state: "hidden" });
   await replace("osc(60,");
-  await expectParameter("sync");
+  await expectParameter("sync = 0.1");
   await editor.press("Control+Backquote");
   await page.locator("body.ui-hidden").waitFor({ state: "attached" });
   await tip.waitFor({ state: "hidden" });
@@ -111,7 +158,7 @@ try {
 
     if (frequency === 15) {
       await replace("osc(60,");
-      await expectParameter("sync");
+      await expectParameter("sync = 0.1");
       assert.equal(
         await page.evaluate(() => window.hydractrl.plugins.unregister("signature-assist")),
         true,

@@ -1,41 +1,31 @@
 import { syntaxTree } from "@codemirror/language";
 import { StateEffect, StateField } from "@codemirror/state";
 import { EditorView, showTooltip } from "@codemirror/view";
-import hydraData from "../../data/hydra-functions.json" assert { type: "json" };
+import { hydraCallAtCursor } from "./hydraSignature.js";
 
-const parameters = hydraData.functions.osc.params.map(({ name }) => name);
 const dismiss = StateEffect.define();
-
-export function oscCallAtCursor(state) {
-  const { head, empty } = state.selection.main;
-  if (!empty) return null;
-
-  for (let node = syntaxTree(state).resolveInner(head, -1); node; node = node.parent) {
-    if (node.name !== "ArgList" || node.parent?.name !== "CallExpression") continue;
-    const close = node.lastChild;
-    if (close?.name === ")" && head >= close.to) continue;
-
-    const callee = node.parent.firstChild;
-    if (callee?.name !== "VariableName" || state.sliceDoc(callee.from, callee.to) !== "osc") {
-      return null;
-    }
-    let active = 0;
-    for (let token = node.firstChild; token && token.to <= head; token = token.nextSibling) {
-      if (token.name === ",") active++;
-    }
-    return { pos: callee.from, active };
-  }
-  return null;
-}
 
 const signature = StateField.define({
   create: () => null,
   update(previous, transaction) {
-    if (transaction.effects.some((effect) => effect.is(dismiss))) return null;
-    if (!transaction.docChanged && !transaction.selection) return previous;
-    const call = oscCallAtCursor(transaction.state);
+    // A background parse update must not reopen a dismissed hint.
+    if (transaction.effects.some((effect) => effect.is(dismiss))) return false;
+    if (!transaction.docChanged && !transaction.selection) {
+      if (
+        previous === false ||
+        syntaxTree(transaction.startState) === syntaxTree(transaction.state)
+      ) {
+        return previous;
+      }
+    }
+    const call = hydraCallAtCursor(transaction.state);
     if (!call) return null;
-    if (call.pos === previous?.pos && call.active === previous.active) return previous;
+    if (
+      call.pos === previous?.pos &&
+      call.active === previous.active &&
+      call.name === previous.name
+    )
+      return previous;
 
     return {
       ...call,
@@ -43,11 +33,13 @@ const signature = StateField.define({
       create() {
         const dom = document.createElement("div");
         dom.className = "cm-signature-assist";
-        dom.append("osc(");
-        parameters.forEach((parameter, index) => {
+        dom.append(`${call.name}(`);
+        call.params.forEach((parameter, index) => {
           if (index) dom.append(", ");
           const label = document.createElement(index === call.active ? "strong" : "span");
-          label.textContent = parameter;
+          label.textContent = Object.hasOwn(parameter, "default")
+            ? `${parameter.name} = ${parameter.default}`
+            : parameter.name;
           dom.append(label);
         });
         dom.append(")");
@@ -55,7 +47,7 @@ const signature = StateField.define({
       },
     };
   },
-  provide: (field) => showTooltip.from(field),
+  provide: (field) => showTooltip.from(field, (value) => value || null),
 });
 
 const extension = [
@@ -69,7 +61,13 @@ const extension = [
     },
   }),
   EditorView.baseTheme({
-    ".cm-signature-assist": { padding: "4px 8px", pointerEvents: "none" },
+    ".cm-signature-assist": {
+      padding: "4px 8px",
+      pointerEvents: "none",
+      maxWidth: "min(64ch, 90vw)",
+      overflowWrap: "anywhere",
+    },
+    "&:not(.cm-focused) .cm-signature-assist": { visibility: "hidden" },
     ".cm-signature-assist strong": { textDecoration: "underline" },
   }),
 ];
