@@ -12,7 +12,7 @@ function parameterLabel(parameter) {
     : parameter.name;
 }
 
-function signatureExtension(editor) {
+export function signatureExtension(editor) {
   const resolve = createCustomSignatureResolver(editor);
   const signature = StateField.define({
     create: () => null,
@@ -37,10 +37,12 @@ function signatureExtension(editor) {
         call.pos === previous?.pos &&
         call.active === previous.active &&
         call.name === previous.name &&
+        call.description === previous.description &&
         call.params.length === previous.params.length &&
         call.params.every(
           (parameter, index) =>
-            parameterLabel(parameter) === parameterLabel(previous.params[index]),
+            parameterLabel(parameter) === parameterLabel(previous.params[index]) &&
+            parameter.documentation === previous.params[index].documentation,
         )
       )
         return previous;
@@ -51,14 +53,27 @@ function signatureExtension(editor) {
         create() {
           const dom = document.createElement("div");
           dom.className = "cm-signature-assist";
-          dom.append(`${call.name}(`);
+          const label = document.createElement("div");
+          label.className = "cm-signature-label";
+          label.append(`${call.name}(`);
           call.params.forEach((parameter, index) => {
-            if (index) dom.append(", ");
-            const label = document.createElement(index === call.active ? "strong" : "span");
-            label.textContent = parameterLabel(parameter);
-            dom.append(label);
+            if (index) label.append(", ");
+            const param = document.createElement(index === call.active ? "strong" : "span");
+            param.textContent = parameterLabel(parameter);
+            label.append(param);
           });
-          dom.append(")");
+          label.append(")");
+          dom.append(label);
+          for (const [kind, text] of [
+            ["summary", call.description],
+            ["parameter", call.params[call.active]?.documentation],
+          ]) {
+            if (!text) continue;
+            const doc = document.createElement("div");
+            doc.className = `cm-signature-doc cm-signature-${kind}`;
+            doc.textContent = text;
+            dom.append(doc);
+          }
           return { dom };
         },
       };
@@ -85,6 +100,15 @@ function signatureExtension(editor) {
         whiteSpace: "pre-wrap",
       },
       "&:not(.cm-focused) .cm-signature-assist": { visibility: "hidden" },
+      ".cm-signature-doc": {
+        marginTop: "4px",
+        fontFamily: "system-ui, sans-serif",
+        whiteSpace: "normal",
+        display: "-webkit-box",
+        WebkitBoxOrient: "vertical",
+        WebkitLineClamp: "3",
+        overflow: "hidden",
+      },
       ".cm-signature-assist strong": { textDecoration: "underline" },
     }),
   ];

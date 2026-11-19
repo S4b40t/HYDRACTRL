@@ -62,8 +62,8 @@ function callableSignature(state, args, custom) {
   if (args.parent.getChild("?.")) return null;
   if (callee.name === "VariableName") {
     const name = state.sliceDoc(callee.from, callee.to);
-    const params = custom(name, callee.from);
-    if (params !== undefined) return params && { name, params };
+    const hint = custom(name, callee.from);
+    if (hint !== undefined) return hint && { name, ...hint };
     return generators.has(name) || helpers.has(name) ? nativeSignature(name) : null;
   }
 

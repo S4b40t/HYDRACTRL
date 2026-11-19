@@ -1,5 +1,6 @@
 import { javascript } from "@codemirror/lang-javascript";
 import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
+import { readSignatureJsdoc } from "./signatureJsdoc.js";
 
 const parser = javascript().language.parser;
 const functionScopes = new Set([
@@ -15,14 +16,31 @@ function nextToken(node) {
   return next;
 }
 
-function parameterList(source, fn) {
+function parameterList(source, fn, docs) {
   if (fn.name !== "ArrowFunction" && fn.getChild("Block")?.lastChild?.name !== "}") return null;
+  const documented = new Map();
+  function parameter(binding, name, rest = false) {
+    const param = { name, rest };
+    if (docs && binding.name === "VariableDefinition") {
+      const key = source.slice(binding.from, binding.to);
+      const first = documented.get(key);
+      if (first) {
+        first.documentation = undefined;
+      } else {
+        const text = docs.descriptions.get(key)?.filter(Boolean).join(" ");
+        if (text) param.documentation = text;
+        documented.set(key, param);
+      }
+    }
+    return param;
+  }
+
   const list = fn.getChild("ParamList");
   if (!list || fn.getChildren("⚠").length) return null;
   if (list.firstChild?.name !== "(") {
     const binding = list.firstChild;
     return binding?.name === "VariableDefinition" && !binding.nextSibling
-      ? [{ name: source.slice(binding.from, binding.to) }]
+      ? [parameter(binding, source.slice(binding.from, binding.to))]
       : null;
   }
   if (list.lastChild?.name !== ")") return null;
@@ -42,11 +60,11 @@ function parameterList(source, fn) {
   for (let part = list.firstChild.nextSibling; part; part = part.nextSibling) {
     if (part.name === ",") {
       if (!binding || rest) return null;
-      params.push({ name: source.slice(start, part.from).trim() });
+      params.push(parameter(binding, source.slice(start, part.from).trim()));
       binding = null;
       start = part.to;
     } else if (part.name === ")") {
-      if (binding) params.push({ name: source.slice(start, part.from).trim(), rest });
+      if (binding) params.push(parameter(binding, source.slice(start, part.from).trim(), rest));
       else if (rest) return null;
     } else {
       if (part.name === "Spread") rest = true;
@@ -69,23 +87,30 @@ function indexCustomSignatures(source, tree) {
     bindings.set(name, bindings.has(name) ? null : signature);
   }
 
+  function signature(declaration, fn, from) {
+    // A declaration-level comment cannot identify one target in a comma-separated list.
+    const docs = declaration.getChild(",") ? null : readSignatureJsdoc(source, declaration);
+    const params = parameterList(source, fn, docs);
+    return params && { from, hint: { params, description: docs?.description } };
+  }
+
   for (let node = tree.topNode.firstChild; node; node = node.nextSibling) {
     if (node.name === "FunctionDeclaration" || node.name === "ClassDeclaration") {
       const binding = node.getChild("VariableDefinition");
       if (binding) {
-        const params = node.name === "FunctionDeclaration" ? parameterList(source, node) : null;
-        record(binding, params && { params, from: 0 });
+        record(binding, node.name === "FunctionDeclaration" ? signature(node, node, 0) : null);
       }
     } else if (node.name === "VariableDeclaration") {
       for (let part = node.firstChild; part; part = part.nextSibling) {
         if (part.name !== "VariableDefinition") continue;
         const equals = nextToken(part);
         const value = equals?.name === "Equals" ? nextToken(equals) : null;
-        const params =
+        record(
+          part,
           value && ["FunctionExpression", "ArrowFunction"].includes(value.name)
-            ? parameterList(source, value)
-            : null;
-        record(part, params && { params, from: value.to });
+            ? signature(node, value, value.to)
+            : null,
+        );
       }
     }
   }
@@ -152,7 +177,7 @@ function indexCustomSignatures(source, tree) {
   return { bindings, nested };
 }
 
-/** Return undefined for an unclaimed name, null for a blocked name, or parameters. */
+/** Return undefined for an unclaimed name, null for a blocked name, or a signature hint. */
 export function createCustomSignatureResolver(editor) {
   const cache = new Map();
   let activeDoc;
@@ -185,11 +210,11 @@ export function createCustomSignatureResolver(editor) {
       if (current.has(name) && inactive.has(name)) return null;
       if (current.has(name)) {
         const signature = current.get(name);
-        return signature && signature.from <= position ? signature.params : null;
+        return signature && signature.from <= position ? signature.hint : null;
       }
       const signature = inactive.get(name);
       if (signature === undefined) return undefined;
-      return signature && (tab === "main" || signature.from === 0) ? signature.params : null;
+      return signature && (tab === "main" || signature.from === 0) ? signature.hint : null;
     };
   };
 }

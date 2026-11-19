@@ -31,6 +31,8 @@ try {
   const editor = page.locator(".cm-content");
   const tip = page.locator(".cm-signature-assist");
   const active = tip.locator("strong");
+  const summary = tip.locator(".cm-signature-summary");
+  const parameterDoc = tip.locator(".cm-signature-parameter");
 
   async function replace(code) {
     await editor.press("Control+a");
@@ -40,7 +42,7 @@ try {
   const oscillator = "osc(frequency = 60, sync = 0.1, offset = 0)";
   async function expectParameter(label, signature = oscillator) {
     await tip.waitFor({ state: "visible" });
-    assert.equal(await tip.textContent(), signature);
+    assert.equal(await tip.locator(".cm-signature-label").textContent(), signature);
     assert.equal(await active.textContent(), label);
   }
 
@@ -138,8 +140,21 @@ try {
 
   const setupTab = page.locator('[data-tab="setup"]');
   const sketchTab = page.locator('[data-tab="main"]');
+  const clampDoc = [
+    "/**",
+    " * Restricts a value to a specified range.",
+    " * @param {number} value - Input value to constrain.",
+    " * @param {number} min - Lower bound.",
+    " * @param {number} max - Upper bound.",
+    " */",
+  ].join("\n");
   const setup = [
+    clampDoc,
     "var clamp = (value, min, max) => Math.min(Math.max(value, min), max)",
+    "/**",
+    " * Interpolates between two values.",
+    " * @param t - Interpolation factor.",
+    " */",
     "function lerp(a, b, t) { return a + (b - a) * t }",
     "const tide = (period, amplitude = 1) => Math.sin(time * 2 * Math.PI / period) * amplitude",
   ].join("\n");
@@ -152,13 +167,75 @@ try {
   await page.evaluate(() => localStorage.removeItem("hydractrl-setup-code"));
   await replace("clamp(0.5,");
   await expectParameter("min", "clamp(value, min, max)");
+  assert.equal(await summary.textContent(), "Restricts a value to a specified range.");
+  assert.equal(await parameterDoc.textContent(), "Lower bound.");
   if (process.env.SIGNATURE_CUSTOM_SCREENSHOT) {
     await page.screenshot({ path: process.env.SIGNATURE_CUSTOM_SCREENSHOT });
   }
+  await page.keyboard.insertText(" 0,");
+  await expectParameter("max", "clamp(value, min, max)");
+  assert.equal(await parameterDoc.textContent(), "Upper bound.");
+  await replace("clamp(0.5, noi");
+  await editor.press("Control+Space");
+  await completion.first().waitFor({ state: "visible" });
+  await expectParameter("min", "clamp(value, min, max)");
+  assert.equal(await parameterDoc.textContent(), "Lower bound.");
+  await page.waitForTimeout(100);
+  await editor.press("Enter");
+  assert.match(await editor.innerText(), /noise\(/);
+  assert.equal(await tip.locator(".cm-signature-doc").count(), 0);
+
+  await replace("clamp(0.5,");
+  await setupTab.click();
+  await replace(setup.replace("Lower bound.", "Lower limit. <em>literal</em>"));
+  await sketchTab.click();
+  await editor.press("End");
+  await expectParameter("min", "clamp(value, min, max)");
+  assert.equal(await parameterDoc.textContent(), "Lower limit. <em>literal</em>");
+  assert.equal(await parameterDoc.locator("em").count(), 0);
+
+  await panel.evaluate((element) => {
+    element.style.width = "400px";
+  });
+  await page.locator("body").evaluate((body) => body.classList.add("theme-light"));
+  await replace("clamp(0.5,");
+  await expectParameter("min", "clamp(value, min, max)");
+  await parameterDoc.waitFor({ state: "visible" });
+  // CodeMirror positions tooltips in a measure pass after inserting their DOM.
+  await page.waitForFunction(
+    () => {
+      const bounds = document.querySelector(".cm-signature-assist")?.getBoundingClientRect();
+      return (
+        bounds &&
+        bounds.left >= 0 &&
+        bounds.right <= innerWidth &&
+        bounds.top >= 0 &&
+        bounds.bottom <= innerHeight
+      );
+    },
+    null,
+    { timeout: 8_000 },
+  );
+  if (process.env.SIGNATURE_DOC_NARROW_SCREENSHOT) {
+    await page.screenshot({ path: process.env.SIGNATURE_DOC_NARROW_SCREENSHOT });
+  }
+  await page.locator("body").evaluate((body) => body.classList.remove("theme-light"));
+  await panel.evaluate((element, width) => {
+    element.style.width = width;
+  }, oldWidth);
+
+  await setupTab.click();
+  await replace(setup.replace(`${clampDoc}\n`, ""));
+  await sketchTab.click();
+  await editor.press("End");
+  await expectParameter("min", "clamp(value, min, max)");
+  assert.equal(await tip.locator(".cm-signature-doc").count(), 0);
   await replace("lerp(0, 1,");
   await expectParameter("t", "lerp(a, b, t)");
+  assert.equal(await parameterDoc.textContent(), "Interpolation factor.");
   await replace("tide(20,");
   await expectParameter("amplitude = 1", "tide(period, amplitude = 1)");
+  assert.equal(await tip.locator(".cm-signature-doc").count(), 0);
   await setupTab.click();
   await replace(setup.replaceAll("amplitude", "depth").replace("depth = 1", "depth = 2"));
   await sketchTab.click();
@@ -176,15 +253,21 @@ try {
   await tip.waitFor({ state: "hidden" });
   await replace("wave(20,");
   await expectParameter("amplitude = 1", "wave(period, amplitude = 1)");
-  await replace("const local = (left, right) => left; local(1,");
+  await replace("/** Local only. */\nconst local = (left, right) => left; local(1,");
   await expectParameter("right", "local(left, right)");
+  assert.equal(await summary.textContent(), "Local only.");
   await replace("const local = (left, edited = 1) => left; local(1,");
   await expectParameter("edited = 1", "local(left, edited = 1)");
+  assert.equal(await summary.count(), 0);
   await page.locator('.slot[data-index="2"]').click();
   await replace("local(1,");
   await tip.waitFor({ state: "hidden" });
-  await replace("clamp(0.5,");
+  await replace("osc(clamp(0.5,");
   await expectParameter("min", "clamp(value, min, max)");
+  assert.equal(await parameterDoc.textContent(), "Lower bound.");
+  await page.keyboard.insertText(" 0, 1),");
+  await expectParameter("sync = 0.1");
+  assert.equal(await tip.locator(".cm-signature-doc").count(), 0);
   await replace("function osc(custom) {} osc(");
   await expectParameter("custom", "osc(custom)");
   await replace("function osc(custom) {} osc().rotate(");
@@ -229,7 +312,7 @@ try {
 
   assert.deepEqual(errors, []);
   console.log(
-    "Passed native and custom signatures, unsaved edits, nesting, autocomplete, tab, slot, visibility, disposal and auto-run checks.",
+    "Passed native and custom signatures, JSDoc and unsaved edits, nesting, autocomplete, tab, slot, visibility, disposal and auto-run checks.",
   );
 } finally {
   await browser.close();

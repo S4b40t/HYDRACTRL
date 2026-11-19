@@ -44,3 +44,23 @@ const tide = (period, amplitude = 1) => Math.sin(time * 2 * Math.PI / period) * 
 ```
 
 Type `clamp(0.5,` to highlight **min**, `lerp(0, 1,` to highlight **t**, or `tide(20,` to highlight **amplitude = 1**. Edit the default in Setup and return to Sketch to see it update. The browser smoke script also verifies discovery after clearing persisted Setup storage, along with nested custom and native calls, slot changes, and existing editor interactions. Set `SIGNATURE_CUSTOM_SCREENSHOT` to capture the `clamp` example.
+
+## In-editor JSDoc
+
+v0.3 shows a short summary and the active argument’s documentation below the custom signature. The signature still uses source-derived names, defaults, and rest or destructuring syntax.
+
+```js
+/**
+ * Restricts a value to a specified range.
+ * @param {number} max - Upper bound.
+ * @param {number} value - Input value to constrain.
+ * @param {number} min - Lower bound.
+ */
+var clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+```
+
+- Place a single `/** … */` block immediately before a supported declaration, on its own line or before the declaration on the same line. A blank line, intervening comment or statement, trailing comment on another statement’s line, stacked JSDoc blocks, and multiple declarators in one statement prevent association.
+- Write the summary before any tags. Put each `@param` on its own line. A simple `{type}` and the hyphen before the description are optional. Description text can continue on the following lines. `[name]`, `[name=default]` with a simple bracket-free default, and `...name` match the underlying parameter name. Types and JSDoc defaults are not used to infer or display the signature.
+- Unmatched tags, conflicting entries for the same name, and destructured bindings receive no parameter documentation. Unknown tags, nested property paths, complex brace types, inline tags, and overloads are outside this subset. User-authored text is displayed literally, with each documentation section capped at three visible lines.
+
+Paste the example into Setup, then switch to Sketch without pressing Run or Save. Type `clamp(0.5,` and check that **min** is highlighted, the summary is visible, and the argument text says “Lower bound.” Type `0,` to see “Upper bound.” Edit just the description in Setup and return to the same call in Sketch. Removing the block leaves the signature. To reproduce these checks in Chromium, run the smoke command above and optionally set `SIGNATURE_CUSTOM_SCREENSHOT` and `SIGNATURE_DOC_NARROW_SCREENSHOT`.
