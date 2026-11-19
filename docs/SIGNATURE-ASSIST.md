@@ -64,3 +64,7 @@ var clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 - Unmatched tags, conflicting entries for the same name, and destructured bindings receive no parameter documentation. Unknown tags, nested property paths, complex brace types, inline tags, and overloads are outside this subset. User-authored text is displayed literally, with each documentation section capped at three visible lines.
 
 Paste the example into Setup, then switch to Sketch without pressing Run or Save. Type `clamp(0.5,` and check that **min** is highlighted, the summary is visible, and the argument text says “Lower bound.” Type `0,` to see “Upper bound.” Edit just the description in Setup and return to the same call in Sketch. Removing the block leaves the signature. To reproduce these checks in Chromium, run the smoke command above and optionally set `SIGNATURE_CUSTOM_SCREENSHOT` and `SIGNATURE_DOC_NARROW_SCREENSHOT`.
+
+## Performance validation
+
+See the [same-build benchmark, results and reproduction steps](SIGNATURE-ASSIST-BENCHMARK.md).
