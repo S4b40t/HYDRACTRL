@@ -68,3 +68,5 @@ Paste the example into Setup, then switch to Sketch without pressing Run or Save
 ## Performance validation
 
 See the [same-build benchmark, results and reproduction steps](SIGNATURE-ASSIST-BENCHMARK.md).
+
+The [isolated CPU diagnostic](SIGNATURE-ASSIST-CPU.md) separates CodeMirror transactions, index rebuilds, and cached lookup from browser and renderer work.
