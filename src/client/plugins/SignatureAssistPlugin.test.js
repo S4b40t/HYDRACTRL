@@ -1,7 +1,17 @@
 import { expect, test } from "bun:test";
 import { javascript } from "@codemirror/lang-javascript";
 import { EditorState } from "@codemirror/state";
+import { signatureExtension } from "./SignatureAssistPlugin.js";
 import { hydraCallAtCursor } from "./hydraSignature.js";
+
+test("reuses the mounted theme while keeping each signature extension's state independent", () => {
+  const editor = { getCurrentTab: () => "main", getTabCode: () => "" };
+  const first = signatureExtension(editor);
+  const second = signatureExtension(editor);
+
+  expect(first.at(-1)).toBe(second.at(-1));
+  expect(first[0]).not.toBe(second[0]);
+});
 
 function resolve(source, extensions = [javascript()]) {
   const anchor = source.indexOf("|");

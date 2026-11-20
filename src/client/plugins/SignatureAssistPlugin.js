@@ -6,6 +6,28 @@ import { hydraCallAtCursor } from "./hydraSignature.js";
 
 const dismiss = StateEffect.define();
 
+// CodeMirror mounts style modules once per document and keeps them mounted.
+const signatureTheme = EditorView.baseTheme({
+  ".cm-signature-assist": {
+    padding: "4px 8px",
+    pointerEvents: "none",
+    maxWidth: "min(64ch, 90vw)",
+    overflowWrap: "anywhere",
+    whiteSpace: "pre-wrap",
+  },
+  "&:not(.cm-focused) .cm-signature-assist": { visibility: "hidden" },
+  ".cm-signature-doc": {
+    marginTop: "4px",
+    fontFamily: "system-ui, sans-serif",
+    whiteSpace: "normal",
+    display: "-webkit-box",
+    WebkitBoxOrient: "vertical",
+    WebkitLineClamp: "3",
+    overflow: "hidden",
+  },
+  ".cm-signature-assist strong": { textDecoration: "underline" },
+});
+
 function parameterLabel(parameter) {
   return Object.hasOwn(parameter, "default")
     ? `${parameter.name} = ${parameter.default}`
@@ -91,26 +113,7 @@ export function signatureExtension(editor) {
         }
       },
     }),
-    EditorView.baseTheme({
-      ".cm-signature-assist": {
-        padding: "4px 8px",
-        pointerEvents: "none",
-        maxWidth: "min(64ch, 90vw)",
-        overflowWrap: "anywhere",
-        whiteSpace: "pre-wrap",
-      },
-      "&:not(.cm-focused) .cm-signature-assist": { visibility: "hidden" },
-      ".cm-signature-doc": {
-        marginTop: "4px",
-        fontFamily: "system-ui, sans-serif",
-        whiteSpace: "normal",
-        display: "-webkit-box",
-        WebkitBoxOrient: "vertical",
-        WebkitLineClamp: "3",
-        overflow: "hidden",
-      },
-      ".cm-signature-assist strong": { textDecoration: "underline" },
-    }),
+    signatureTheme,
   ];
 }
 
