@@ -413,14 +413,16 @@ try {
     await cdp.detach();
   }
 
-  for (const fixture of fixtures) {
-    for (const autoRun of fixture.size === "stress" ? [false] : [false, true]) {
-      for (let pair = 0; pair < config.pairs; pair++) {
-        for (const enabled of pair % 2 ? [true, false] : [false, true]) {
-          raw.trials.push({ pair: pair + 1, ...(await trial(fixture, autoRun, enabled)) });
+  if (config.stage !== "heap") {
+    for (const fixture of fixtures) {
+      for (const autoRun of fixture.size === "stress" ? [false] : [false, true]) {
+        for (let pair = 0; pair < config.pairs; pair++) {
+          for (const enabled of pair % 2 ? [true, false] : [false, true]) {
+            raw.trials.push({ pair: pair + 1, ...(await trial(fixture, autoRun, enabled)) });
+          }
+          await verifyServer();
+          await writeFile(config.output, JSON.stringify(raw));
         }
-        await verifyServer();
-        await writeFile(config.output, JSON.stringify(raw));
       }
     }
   }
@@ -430,11 +432,13 @@ try {
   });
   probeHash = sha256(await readFile(probe));
   raw.provenance.diagnosticBundleSha256 = probeHash;
-  for (const fixture of fixtures) {
-    for (const autoRun of config.targeted && fixture.size === "real-setup"
-      ? [false, true]
-      : [false]) {
-      raw.diagnostics.push(await trial(fixture, autoRun, true, true));
+  if (config.stage !== "heap") {
+    for (const fixture of fixtures) {
+      for (const autoRun of config.targeted && fixture.size === "real-setup"
+        ? [false, true]
+        : [false]) {
+        raw.diagnostics.push(await trial(fixture, autoRun, true, true));
+      }
     }
   }
   for (let pair = 0; pair < config.heapPairs; pair++) {

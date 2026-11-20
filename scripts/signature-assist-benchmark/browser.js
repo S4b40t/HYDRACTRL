@@ -102,6 +102,15 @@
     view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true }));
   }
 
+  function extensionStatus() {
+    const [field, focus, keys] = probe.extensionRefs?.map((ref) => ref.deref()) ?? [];
+    return {
+      field: Boolean(field && view.state.field(field, false) !== undefined),
+      focus: Boolean(focus && view.state.facet(probe.focusEffect).includes(focus)),
+      keys: Boolean(keys && view.plugin(keys)),
+    };
+  }
+
   function setupChange(base, previous, next) {
     let start = 0;
     while (
@@ -423,7 +432,7 @@
       return {
         mode: host.getStatus(pluginId),
         tooltip: Boolean(hint()),
-        extension: probe.extensionStatus?.(view) ?? { field: false, focus: false, keys: false },
+        extension: extensionStatus(),
         autoRun: host.getStatus("auto-run") === "active",
       };
     },

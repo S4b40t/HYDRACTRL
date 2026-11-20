@@ -20,6 +20,9 @@ export function configuration(env) {
     throw new Error("Use BENCH_PROFILE=pilot, full, targeted or targeted-pilot");
   const pilot = profile.endsWith("pilot");
   const targeted = profile.startsWith("targeted");
+  const stage = env.BENCH_STAGE ?? "all";
+  if (stage !== "all" && (stage !== "heap" || !targeted))
+    throw new Error("BENCH_STAGE=heap requires a targeted profile");
   if (targeted && !env.BENCH_FIXTURE)
     throw new Error("Set BENCH_FIXTURE to the path of the reviewed Setup file");
   const revision = env.BENCH_REVISION?.toLowerCase();
@@ -35,6 +38,7 @@ export function configuration(env) {
     profile,
     pilot,
     targeted,
+    stage,
     fixturePath: targeted ? path.resolve(env.BENCH_FIXTURE) : null,
     snapshotDirectory:
       targeted && env.BENCH_HEAP_SNAPSHOTS_DIR ? path.resolve(env.BENCH_HEAP_SNAPSHOTS_DIR) : null,

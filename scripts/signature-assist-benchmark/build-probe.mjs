@@ -137,19 +137,12 @@ const result = await Bun.build({
                 [
                   "  ];\n}\n\nexport function createSignatureAssistPlugin()",
                   `  ];
-  const fieldRef = new WeakRef(extension[0]);
-  const focusRef = new WeakRef(extension[1].value);
-  const keysRef = new WeakRef(extension[2]);
-  globalThis.__signatureProbe.extensionStatus = (view) => {
-    const field = fieldRef.deref();
-    const focus = focusRef.deref();
-    const keys = keysRef.deref();
-    return {
-      field: Boolean(field && view.state.field(field, false) !== undefined),
-      focus: Boolean(focus && view.state.facet(EditorView.focusChangeEffect).includes(focus)),
-      keys: Boolean(keys && view.plugin(keys)),
-    };
-  };
+  globalThis.__signatureProbe.extensionRefs = [
+    new WeakRef(extension[0]),
+    new WeakRef(extension[1].value),
+    new WeakRef(extension[2]),
+  ];
+  globalThis.__signatureProbe.focusEffect = EditorView.focusChangeEffect;
   return extension;
 }
 
