@@ -89,22 +89,28 @@ function compare(trials, values, summarize = stats) {
 }
 
 const groups = [];
+const setupPhases = ["body", "parameter", "declaration", "jsdoc", "recovery"].map(
+  (kind) => `setup-${kind}`,
+);
 for (const fixture of raw.fixtures) {
   for (const autoRun of [false, true]) {
     const trials = raw.trials.filter(
       (trial) => trial.fixture === fixture.size && trial.autoRun === autoRun,
     );
     if (!trials.length) continue;
+    const availableSetupPhases = setupPhases.filter((phase) =>
+      trials.some((trial) => trial.phases[phase]),
+    );
     const dispatch = Object.fromEntries(
-      ["cold", "cursor", "editing", "tab", "slot"].map((phase) => [
+      ["cold", "cursor", "editing", "tab", "slot", ...availableSetupPhases].map((phase) => [
         phase,
         compare(trials, (trial) => trial.phases[phase]?.dispatchMs ?? []),
       ]),
     );
     const frameTiming = Object.fromEntries(
-      ["idle", "editing", "after-edit"].map((phase) => [
+      ["idle", "editing", "after-edit", ...availableSetupPhases].map((phase) => [
         phase,
-        compare(trials, (trial) => trial.phases[phase].intervalsMs, frames),
+        compare(trials, (trial) => trial.phases[phase]?.intervalsMs ?? [], frames),
       ]),
     );
     const typing = Object.fromEntries(
@@ -132,6 +138,14 @@ for (const fixture of raw.fixtures) {
         },
       ]),
     );
+    const sketchOperations = availableSetupPhases.length
+      ? Object.fromEntries(
+          ["native", "custom", "nested"].map((name) => [
+            name,
+            compare(trials, (trial) => trial.phases.editing.operations?.[name] ?? []),
+          ]),
+        )
+      : undefined;
     groups.push({
       fixture: fixture.size,
       autoRun,
@@ -139,12 +153,14 @@ for (const fixture of raw.fixtures) {
       dispatch,
       frameTiming,
       typing,
+      sketchOperations,
     });
   }
 }
 
 const cache = raw.diagnostics.map((trial) => ({
   fixture: trial.fixture,
+  autoRun: trial.autoRun,
   phases: Object.fromEntries(
     ["cold", "cursor", "editing", "tab", "slot"].map((phase) => [
       phase,
@@ -160,7 +176,20 @@ const cache = raw.diagnostics.map((trial) => ({
       ),
     ]),
   ),
+  components: summarizeComponents(trial.cache),
 }));
+
+function summarizeComponents(events) {
+  const groups = new Map();
+  for (const { phase, kind, tab, operation, ms } of events) {
+    const key = JSON.stringify([phase, tab ?? null, operation ?? null, kind]);
+    if (!groups.has(key)) groups.set(key, { phase, tab, operation, kind, count: 0, timings: [] });
+    const group = groups.get(key);
+    group.count++;
+    if (Number.isFinite(ms)) group.timings.push(ms);
+  }
+  return [...groups.values()].map(({ timings, ...group }) => ({ ...group, ...stats(timings) }));
+}
 const heapSamples = (samples) =>
   samples.map((sample) => ({
     cycle: sample.cycle,
@@ -173,8 +202,14 @@ const heapSamples = (samples) =>
 
 function referenceCadence(trial) {
   return Object.fromEntries(
-    ["idle", "editing"].map((phase) => {
-      const data = trial.phases[phase];
+    ["idle", "editing", ...(trial.phases["setup-body"] ? ["setup-editing"] : [])].map((phase) => {
+      const data =
+        phase === "setup-editing"
+          ? {
+              intervalsMs: setupPhases.flatMap((name) => trial.phases[name].intervalsMs),
+              durationMs: setupPhases.reduce((sum, name) => sum + trial.phases[name].durationMs, 0),
+            }
+          : trial.phases[phase];
       const result = frames(data.intervalsMs);
       const minimumSamples = Math.max(600, Math.floor(data.durationMs * 0.05));
       const stable =
@@ -208,17 +243,34 @@ const treatmentSamples = raw.trials
 const eligibility =
   raw.status === "complete" &&
   raw.provenance.config?.mode === "hardware" &&
-  raw.provenance.config?.profile === "full" &&
-  reference.length === 4 * raw.provenance.config.pairs &&
-  reference.every(({ idle, editing }) => idle.stable && editing.stable) &&
+  ["full", "targeted"].includes(raw.provenance.config?.profile) &&
+  reference.length === (raw.provenance.config.targeted ? 2 : 4) * raw.provenance.config.pairs &&
+  reference.every(
+    ({ idle, editing, "setup-editing": setup }) =>
+      idle.stable && editing.stable && (!setup || setup.stable),
+  ) &&
   treatmentSamples.length === reference.length &&
   treatmentSamples.every(
-    ({ idle, editing }) => idle.n >= idle.minimumSamples && editing.n >= editing.minimumSamples,
+    ({ idle, editing, "setup-editing": setup }) =>
+      idle.n >= idle.minimumSamples &&
+      editing.n >= editing.minimumSamples &&
+      (!setup || setup.n >= setup.minimumSamples),
   );
 const representative = groups.filter((group) => group.fixture !== "stress");
 const editorFlags = representative.flatMap((group) => {
   const operations = {
     editing: group.dispatch.editing,
+    ...Object.fromEntries(
+      setupPhases
+        .filter((phase) => group.dispatch[phase])
+        .map((phase) => [phase, group.dispatch[phase]]),
+    ),
+    ...Object.fromEntries(
+      Object.entries(group.sketchOperations ?? {}).map(([name, value]) => [
+        `sketch-${name}`,
+        value,
+      ]),
+    ),
     ...Object.fromEntries(
       Object.entries(group.typing).map(([name, value]) => [name, value.dispatch]),
     ),
@@ -236,7 +288,8 @@ const frameFlags = representative.flatMap((group) =>
   Object.entries(group.frameTiming)
     .filter(
       ([phase, result]) =>
-        phase !== "after-edit" && result.pairedOver5Percent >= Math.ceil((group.trials / 2) * 0.8),
+        ["idle", "editing", ...setupPhases].includes(phase) &&
+        result.pairedOver5Percent >= Math.ceil((group.trials / 2) * 0.8),
     )
     .map(([phase, result]) => ({
       fixture: group.fixture,
@@ -245,10 +298,11 @@ const frameFlags = representative.flatMap((group) =>
       pairsOver5Percent: result.pairedOver5Percent,
     })),
 );
-const heapTrials = (raw.heapTrials ?? []).map(({ pair, control, samples }) => ({
+const heapTrials = (raw.heapTrials ?? []).map(({ pair, control, samples, beforeWarmup }) => ({
   pair,
   control,
   samples: heapSamples(samples),
+  beforeWarmupKiB: round(beforeWarmup?.usedSize / 1024),
   postGcGrowthKiB: round((samples.at(-1).disposed.usedSize - samples[0].disposed.usedSize) / 1024),
 }));
 
@@ -258,6 +312,8 @@ console.log(
       experimentStatus: raw.status ?? "historical",
       failure: raw.failure ?? null,
       mode: raw.provenance.config?.mode ?? "historical",
+      profile: raw.provenance.config?.profile,
+      fixtureHashes: raw.fixtureHashes,
       reference60Hz: {
         status: eligibility ? "eligible-for-review" : "inconclusive",
         controls: reference,

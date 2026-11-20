@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { closeSync, openSync, writeSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { browserExecutable, classifyGpu, configuration } from "./platform.mjs";
 import { sha256, startServer, stopServer } from "./server.mjs";
+import { loadTargetedFixture } from "./targeted.mjs";
 
 const config = configuration(process.env);
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -54,7 +56,10 @@ function fixture(size, setupExtra, sketchExtra) {
   };
 }
 
-const fixtures = [fixture("small", 4, 4), fixture("medium", 70, 60), fixture("stress", 520, 450)];
+const fixtures = config.targeted
+  ? [await loadTargetedFixture(config.fixturePath), fixture("stress", 520, 450)]
+  : [fixture("small", 4, 4), fixture("medium", 70, 60), fixture("stress", 520, 450)];
+const heapFixture = config.targeted ? fixtures[0] : fixtures[1];
 
 async function cgroup(name) {
   if (process.platform !== "linux") return null;
@@ -101,6 +106,12 @@ const raw = {
     ).version,
   },
   fixtures,
+  fixtureHashes: fixtures.map(({ size, setup, sketch, metadata }) => ({
+    size,
+    setupSha256: sha256(setup),
+    sketchSha256: sha256(sketch),
+    ...metadata,
+  })),
   trials: [],
   diagnostics: [],
   heapTrials: [],
@@ -215,8 +226,9 @@ async function trial(fixture, autoRun, enabled, diagnostic = false) {
       `${diagnostic ? "Diagnostic" : "Trial"} ${fixture.size}, plugin ${enabled ? "on" : "off"}, auto-run ${autoRun}, ${environment.graphics.classification}`,
     );
     const stress = fixture.size === "stress";
+    const customHint = fixture.customHint ?? custom;
     await page.evaluate(() => window.signatureBenchmark.cold());
-    const coldTooltip = await validateTooltip(page, enabled ? custom : null, stress);
+    const coldTooltip = await validateTooltip(page, enabled ? customHint : null, stress);
     const typing = [];
     for (let index = 0; index < 3; index++) {
       await page.evaluate((index) => window.signatureBenchmark.prepareTyping(index), index);
@@ -224,7 +236,7 @@ async function trial(fixture, autoRun, enabled, diagnostic = false) {
       const measured = await page.evaluate(() => window.signatureBenchmark.finishTyping());
       measured.settledTooltip = await validateTooltip(
         page,
-        enabled ? (index ? custom : native) : null,
+        enabled ? (index ? customHint : native) : null,
         stress,
       );
       typing.push(measured);
@@ -248,6 +260,19 @@ async function trial(fixture, autoRun, enabled, diagnostic = false) {
       measurements.runs.some(({ phase }) => phase === "after-edit" || phase === "editing"),
       autoRun,
     );
+    if (fixture.setupScenarios) {
+      for (const kind of Object.keys(fixture.setupScenarios).filter(
+        (kind) => kind !== "recovery",
+      )) {
+        assert.equal(
+          measurements.runs.some(
+            ({ phase }) => phase === `setup-${kind}` || phase === `setup-after-${kind}`,
+          ),
+          autoRun,
+          `Unexpected auto-run behavior during Setup ${kind} edits`,
+        );
+      }
+    }
     if (!enabled) assert.ok(typing.every((item) => !item.tooltip));
     return {
       fixture: fixture.size,
@@ -264,7 +289,7 @@ async function trial(fixture, autoRun, enabled, diagnostic = false) {
   }
 }
 
-async function memoryTrial(pair, control) {
+async function memoryTrial(pair, control, snapshotDirectory) {
   checkInterrupted();
   const context = await browser.newContext({
     viewport: { width: 1280, height: 720 },
@@ -273,24 +298,41 @@ async function memoryTrial(pair, control) {
   try {
     const { page, errors } = await freshPage(context, true);
     const environment = await page.evaluate((options) => window.signatureBenchmark.init(options), {
-      fixture: fixtures[1],
+      fixture: heapFixture,
       enabled: false,
       autoRun: false,
       timing: diagnosticTiming,
     });
-    verifyGraphics(environment, { fixture: "medium", heap: true, pair, control });
+    verifyGraphics(environment, { fixture: heapFixture.size, heap: true, pair, control });
     const cdp = await context.newCDPSession(page);
     async function heap() {
       await cdp.send("HeapProfiler.collectGarbage");
       return cdp.send("Runtime.getHeapUsage");
     }
-    const samples = [{ cycle: 0, disposed: await heap() }];
-    for (let cycle = 1; cycle <= config.heapCycles; cycle++) {
+    async function snapshot(label) {
+      if (!snapshotDirectory) return;
+      const arm = control ? "control" : "lifecycle";
+      const output = path.join(snapshotDirectory, `${arm}-${label}.heapsnapshot`);
+      const fd = openSync(output, "wx");
+      const append = ({ chunk }) => writeSync(fd, chunk);
+      cdp.on("HeapProfiler.addHeapSnapshotChunk", append);
+      try {
+        await cdp.send("HeapProfiler.takeHeapSnapshot", { reportProgress: false });
+      } finally {
+        cdp.off("HeapProfiler.addHeapSnapshotChunk", append);
+        closeSync(fd);
+      }
+    }
+    async function cycleOnce(cycle) {
       const installedState = await page.evaluate(
         (control) => window.signatureBenchmark.cycle(true, control),
         control,
       );
-      installedState.hint = await validateTooltip(page, control ? null : custom, false);
+      installedState.hint = await validateTooltip(
+        page,
+        control ? null : (heapFixture.customHint ?? custom),
+        false,
+      );
       assert.equal(installedState.mode, control ? null : "active");
       const installed = await heap();
       const disposedState = await page.evaluate(
@@ -299,10 +341,28 @@ async function memoryTrial(pair, control) {
       );
       assert.equal(disposedState.mode, null);
       assert.equal(disposedState.tooltip, false);
-      samples.push({ cycle, installed, disposed: await heap(), installedState, disposedState });
+      if (config.targeted) {
+        assert.deepEqual(installedState.extension, {
+          field: !control,
+          focus: !control,
+          keys: !control,
+        });
+        assert.deepEqual(disposedState.extension, { field: false, focus: false, keys: false });
+        assert.equal(disposedState.autoRun, true);
+      }
+      return { cycle, installed, disposed: await heap(), installedState, disposedState };
     }
+    const beforeWarmup = await heap();
+    await snapshot("initial");
+    for (let cycle = 0; cycle < (config.targeted && !config.pilot ? 5 : 0); cycle++) {
+      await cycleOnce(cycle);
+    }
+    const samples = [{ cycle: 0, disposed: await heap() }];
+    await snapshot("warm");
+    for (let cycle = 1; cycle <= config.heapCycles; cycle++) samples.push(await cycleOnce(cycle));
+    await snapshot("disposed");
     assert.deepEqual(errors, []);
-    return { pair, control, samples };
+    return { pair, control, beforeWarmup, samples };
   } finally {
     await context.close();
   }
@@ -370,11 +430,24 @@ try {
   });
   probeHash = sha256(await readFile(probe));
   raw.provenance.diagnosticBundleSha256 = probeHash;
-  for (const fixture of fixtures) raw.diagnostics.push(await trial(fixture, false, true, true));
+  for (const fixture of fixtures) {
+    for (const autoRun of config.targeted && fixture.size === "real-setup"
+      ? [false, true]
+      : [false]) {
+      raw.diagnostics.push(await trial(fixture, autoRun, true, true));
+    }
+  }
   for (let pair = 0; pair < config.heapPairs; pair++) {
     for (const control of pair % 2 ? [false, true] : [true, false]) {
       raw.heapTrials.push(await memoryTrial(pair + 1, control));
       await writeFile(config.output, JSON.stringify(raw));
+    }
+  }
+  if (config.snapshotDirectory) {
+    await mkdir(config.snapshotDirectory, { recursive: true });
+    raw.snapshotTrials = [];
+    for (const control of [true, false]) {
+      raw.snapshotTrials.push(await memoryTrial(1, control, config.snapshotDirectory));
     }
   }
   await verifyServer();

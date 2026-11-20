@@ -45,6 +45,17 @@ const pilot = configuration({ BENCH_MODE: "software", BENCH_PROFILE: "pilot" });
 assert.equal(pilot.pairs, 1);
 assert.equal(pilot.headless, true);
 assert.ok(pilot.args.includes("--use-angle=swiftshader"));
+assert.throws(
+  () => configuration({ BENCH_REVISION: revision, BENCH_PROFILE: "targeted" }),
+  /BENCH_FIXTURE/,
+);
+const targeted = configuration({
+  BENCH_REVISION: revision,
+  BENCH_PROFILE: "targeted",
+  BENCH_FIXTURE: "fixture.js",
+});
+assert.equal(targeted.pairs, 5);
+assert.equal(targeted.heapCycles, 60);
 assert.deepEqual(
   isolatedServerEnv({ HYDRACTRL_MEDIA_DIR: "C:\\Live Media", PORT: "3000" }, 43127),
   {

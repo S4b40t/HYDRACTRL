@@ -16,8 +16,12 @@ export function configuration(env) {
   const profile = env.BENCH_PROFILE ?? "full";
   if (!["hardware", "software"].includes(mode))
     throw new Error("Use BENCH_MODE=hardware or software");
-  if (!["pilot", "full"].includes(profile)) throw new Error("Use BENCH_PROFILE=pilot or full");
-  const pilot = profile === "pilot";
+  if (!["pilot", "full", "targeted", "targeted-pilot"].includes(profile))
+    throw new Error("Use BENCH_PROFILE=pilot, full, targeted or targeted-pilot");
+  const pilot = profile.endsWith("pilot");
+  const targeted = profile.startsWith("targeted");
+  if (targeted && !env.BENCH_FIXTURE)
+    throw new Error("Set BENCH_FIXTURE to the path of the reviewed Setup file");
   const revision = env.BENCH_REVISION?.toLowerCase();
   if ((revision && !/^[a-f\d]{40}$/.test(revision)) || (mode === "hardware" && !revision)) {
     throw new Error("Set BENCH_REVISION to the exact 40-character commit SHA");
@@ -30,13 +34,23 @@ export function configuration(env) {
     mode,
     profile,
     pilot,
+    targeted,
+    fixturePath: targeted ? path.resolve(env.BENCH_FIXTURE) : null,
+    snapshotDirectory:
+      targeted && env.BENCH_HEAP_SNAPSHOTS_DIR ? path.resolve(env.BENCH_HEAP_SNAPSHOTS_DIR) : null,
     revision,
     port,
     pairs: number(env, "PAIRS", pilot ? 1 : 5, pilot ? 1 : 5, 20),
     warmMs: number(env, "BENCH_WARM_MS", pilot ? 800 : 5000, 500, 60_000),
     idleMs: number(env, "BENCH_IDLE_MS", pilot ? 1300 : 15_000, pilot ? 500 : 15_000, 120_000),
     editMs: number(env, "BENCH_EDIT_MS", pilot ? 1400 : 15_000, pilot ? 500 : 15_000, 120_000),
-    heapCycles: number(env, "BENCH_HEAP_CYCLES", pilot ? 2 : 30, pilot ? 2 : 20, 200),
+    heapCycles: number(
+      env,
+      "BENCH_HEAP_CYCLES",
+      pilot ? 2 : targeted ? 60 : 30,
+      pilot ? 2 : targeted ? 60 : 20,
+      200,
+    ),
     heapPairs: number(env, "BENCH_HEAP_PAIRS", pilot ? 1 : 2, pilot ? 1 : 2, 10),
     output: path.resolve(
       env.BENCH_OUTPUT ?? path.join(os.tmpdir(), `hydractrl-${mode}-${profile}-${Date.now()}.json`),

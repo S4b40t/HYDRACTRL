@@ -16,6 +16,8 @@
   let view;
   let phase;
   let typing;
+  let operation;
+  let enabled;
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
   const hint = () => document.querySelector(".cm-signature-assist");
@@ -93,6 +95,102 @@
 
   function tab(id) {
     document.querySelector(`.editor-tab[data-tab="${id}"]`).click();
+    probe.tab = id;
+  }
+
+  function autoRunKey() {
+    view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true }));
+  }
+
+  function setupChange(base, previous, next) {
+    let start = 0;
+    while (
+      start < Math.min(previous.length, next.code.length) &&
+      previous[start] === next.code[start]
+    )
+      start++;
+    let tail = 0;
+    while (
+      tail < Math.min(previous.length, next.code.length) - start &&
+      previous[previous.length - 1 - tail] === next.code[next.code.length - 1 - tail]
+    )
+      tail++;
+    const anchor = next.call
+      ? base + next.code.lastIndexOf(next.call) + next.call.lastIndexOf(", ") + 2
+      : base + next.code.length - 2;
+    view.dispatch({
+      changes: {
+        from: base + start,
+        to: base + previous.length - tail,
+        insert: next.code.slice(start, next.code.length - tail),
+      },
+      selection: { anchor },
+      scrollIntoView: true,
+    });
+    return next.code;
+  }
+
+  async function checkSetupHint(expected) {
+    const deadline = performance.now() + 6000;
+    const expectedJson = JSON.stringify(enabled ? expected : null);
+    await frame();
+    while (JSON.stringify(window.signatureBenchmark.readHint()) !== expectedJson) {
+      if (performance.now() > deadline)
+        throw new Error("Unexpected Setup edit signature or documentation");
+      await frame();
+    }
+    // Catch a stale hint that appears only after viewport parsing.
+    await frame();
+    if (JSON.stringify(window.signatureBenchmark.readHint()) !== expectedJson)
+      throw new Error("Setup edit signature changed after settling");
+  }
+
+  async function setupEditing() {
+    tab("setup");
+    view.focus();
+    const base = view.state.doc.length;
+    let previous = "";
+    const observations = {};
+    const scenarios = Object.entries(fixture.setupScenarios);
+    try {
+      for (const [name, variants] of scenarios) {
+        observations[name] = [];
+        for (const next of variants) {
+          previous = setupChange(base, previous, next);
+          await checkSetupHint(next.hint);
+          observations[name].push(window.signatureBenchmark.readHint());
+        }
+
+        start(`setup-${name}`);
+        const cadence = 90;
+        const duration = timing.editMs / scenarios.length;
+        const scheduled = performance.now();
+        for (let elapsed = 0, index = 0; elapsed < duration; elapsed += cadence, index++) {
+          previous = setupChange(base, previous, variants[index % variants.length]);
+          if (name !== "recovery") autoRunKey();
+          await wait(
+            Math.max(0, scheduled + Math.min(elapsed + cadence, duration) - performance.now()),
+          );
+        }
+        end();
+        // Let the valid edits' debounce settle before exercising malformed source.
+        if (name !== "recovery") {
+          start(`setup-after-${name}`);
+          await wait(340);
+          end();
+          if (document.querySelector(".error-notification")) {
+            throw new Error(`Sketch execution failed during Setup ${name} edits`);
+          }
+        }
+        previous = setupChange(base, previous, { code: "", call: null });
+      }
+    } finally {
+      if (view.state.doc.length > base) {
+        view.dispatch({ changes: { from: base, to: view.state.doc.length } });
+      }
+      tab("main");
+    }
+    return observations;
   }
 
   function observeTyping() {
@@ -123,6 +221,7 @@
     async init(options) {
       fixture = options.fixture;
       timing = options.timing;
+      enabled = options.enabled;
       const host = window.hydractrl.plugins;
       if (!options.enabled) host.unregister(pluginId);
       if (host.getStatus(pluginId) !== (options.enabled ? "active" : null)) {
@@ -134,7 +233,16 @@
       view.dispatch = (...args) => {
         const started = performance.now();
         dispatch(...args);
-        if (phase) phases[phase].dispatchMs.push(performance.now() - started);
+        if (phase) {
+          const duration = performance.now() - started;
+          const data = phases[phase];
+          data.dispatchMs.push(duration);
+          if (operation) {
+            data.operations ??= {};
+            data.operations[operation] ??= [];
+            data.operations[operation].push(duration);
+          }
+        }
       };
       observeTyping();
       requestAnimationFrame(sampleFrame);
@@ -235,9 +343,15 @@
         phases.editing.latenessMs.push(
           Math.max(0, performance.now() - scheduled - batch * cadence),
         );
-        for (const position of targets) edit(position);
+        for (const [index, position] of targets.entries()) {
+          if (fixture.setupScenarios) operation = ["native", "custom", "nested"][index];
+          probe.operation = operation;
+          edit(position);
+        }
+        operation = null;
+        probe.operation = null;
         // The real auto-run listener receives one key event per valid edit batch.
-        view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true }));
+        autoRunKey();
         await wait(
           Math.max(
             0,
@@ -251,10 +365,15 @@
       await wait(420);
       end();
 
+      const setupObservations = fixture.setupScenarios ? await setupEditing() : null;
       start("tab");
       for (let iteration = 0; iteration < 4; iteration++) {
         tab("setup");
-        view.dispatch({ selection: { anchor: fixture.setup.indexOf("benchClamp(0.4,") + 16 } });
+        view.dispatch({
+          selection: {
+            anchor: fixture.setupCursor ?? fixture.setup.indexOf("benchClamp(0.4,") + 16,
+          },
+        });
         tab("main");
         view.dispatch({ selection: { anchor: targets[0] } });
       }
@@ -273,6 +392,7 @@
         runs,
         cache: probe.events,
         visibility,
+        setupObservations,
         modeAfter: window.hydractrl.plugins.getStatus(pluginId),
       };
     },
@@ -285,7 +405,11 @@
         const end = view.state.doc.length;
         view.dispatch({ changes: { from: end, insert: " " } });
         view.dispatch({ changes: { from: end, to: end + 1 } });
-        view.dispatch({ selection: { anchor: fixture.setup.indexOf("benchClamp(0.4,") + 16 } });
+        view.dispatch({
+          selection: {
+            anchor: fixture.setupCursor ?? fixture.setup.indexOf("benchClamp(0.4,") + 16,
+          },
+        });
         tab("main");
         view.focus();
         const target = positions()[1];
@@ -296,7 +420,12 @@
       }
       await frame();
       await frame();
-      return { mode: host.getStatus(pluginId), tooltip: Boolean(hint()) };
+      return {
+        mode: host.getStatus(pluginId),
+        tooltip: Boolean(hint()),
+        extension: probe.extensionStatus?.(view) ?? { field: false, focus: false, keys: false },
+        autoRun: host.getStatus("auto-run") === "active",
+      };
     },
   };
 })();

@@ -88,3 +88,41 @@ The primary arms run the same built bundle. A separate short diagnostic bundle c
 The launcher closes the browser and its dedicated Bun server on completion or failure. For an interrupted run, use Ctrl+C and allow the launcher to write its partial JSON. Check `Get-NetTCPConnection -LocalPort 43127 -State Listen -ErrorAction SilentlyContinue` (or the port you used). An unrelated listener should be left alone. Keep any results you intend to review, then remove only the separate benchmark checkout if you no longer need it. The normal installation is unaffected.
 
 For a software comparison, use `BENCH_MODE=software` with a new output filename. The launcher explicitly uses headless SwiftShader and requires evidence of software rendering. These traces reproduce the software workload without serving as hardware results.
+
+## Targeted Setup workflow
+
+Use a clean checkout of the targeted harness commit. Preserve the original hardware run and pin the unmodified application baseline at `0a4c73ae546aba12996490d3734e25657d001373`. The targeted profile uses the reviewed Setup v1 file and a generated Sketch in a separate browser profile. Supply the original bytes via `BENCH_FIXTURE`. The loader verifies the approved SHA-256 before passing the fixture to the app and records its byte, character, and documented helper counts. Keep the file under an ignored directory such as `.bun/private-benchmark`. The app's normal CodeMirror editor handles line endings.
+
+Run platform checks, `bun test`, `bun run lint`, `bun run build`, and the real-editor smoke script before collecting hardware timings. Point the smoke script at the isolated loopback server and installed Chromium binary. Use a dedicated port and disable media as in the benchmark launcher.
+
+```powershell
+$PrivateBench = Join-Path (Get-Location).Path '.bun\private-benchmark'
+$env:BENCH_FIXTURE = Join-Path $PrivateBench 'HYDRACTRL_Setup_v1.js'
+Get-FileHash -Algorithm SHA256 -LiteralPath $env:BENCH_FIXTURE
+$env:BENCH_REVISION = (git rev-parse HEAD).Trim()
+$env:BENCH_MODE = 'hardware'
+$env:BENCH_PORT = '43127'
+Remove-Item Env:HYDRACTRL_URL -ErrorAction SilentlyContinue
+$env:BENCH_PROFILE = 'targeted-pilot'
+$env:BENCH_OUTPUT = Join-Path $PrivateBench 'targeted-pilot.json'
+node scripts/signature-assist-benchmark/run.mjs
+if ($LASTEXITCODE -ne 0) { throw 'Targeted pilot failed' }
+node scripts/signature-assist-benchmark/summarize.mjs $env:BENCH_OUTPUT
+```
+
+After reviewing the pilot, run the full targeted matrix while the display is available for the visible browser. It takes approximately 25–40 minutes, depending on the notebook and snapshot option. The pilot takes a few minutes.
+
+```powershell
+$env:BENCH_PROFILE = 'targeted'
+$env:BENCH_OUTPUT = Join-Path $PrivateBench 'targeted-baseline.json'
+# Optional. Collect snapshots in fresh contexts after the regular heap arms.
+# $env:BENCH_HEAP_SNAPSHOTS_DIR = Join-Path $PrivateBench 'baseline-snapshots'
+node scripts/signature-assist-benchmark/run.mjs
+if ($LASTEXITCODE -ne 0) { throw "Inspect partial results in $env:BENCH_OUTPUT" }
+node scripts/signature-assist-benchmark/summarize.mjs $env:BENCH_OUTPUT |
+  Set-Content -Encoding utf8 (Join-Path $PrivateBench 'targeted-baseline-summary.json')
+```
+
+The primary matrix runs the real Setup with auto-run off and on, plus the original synthetic stress case with auto-run off. Each setting uses five alternating pairs and 15-second Sketch idle and editing windows. Native, custom and nested Sketch edits retain separate dispatch samples. The real fixture also exercises five active Setup edit types for a combined 15 seconds, with a separate timing series per type. It verifies valid and recovered hints and clears the temporary Setup declarations after each type. The malformed phase runs without triggering auto-run. Warm tab switches and changed slots have separate timing series.
+
+The diagnostic bundle runs after the primary trials and records counts and timing by phase, tab and operation. Component ranges may nest and include measurement overhead. Use them to locate work and compare hit/miss frequency. Use the primary bundle for absolute latency and frame comparisons. Matched heap arms warm each context before recording 60 cycles per arm. The optional snapshot switch uses two additional fresh contexts and captures snapshots before warm-up, after warm-up and after disposal. Raw traces and snapshots can contain source, fixture text, and local paths. Keep them local and share aggregate results.

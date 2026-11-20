@@ -1,6 +1,29 @@
 // Assemble a temporary diagnostic bundle. The normal build is left untouched.
 import { readFile, writeFile } from "node:fs/promises";
 
+function replace(contents, marker, replacement) {
+  if (!contents.includes(marker)) throw new Error(`Missing diagnostic anchor: ${marker}`);
+  return contents.replace(marker, replacement);
+}
+
+const timingHelpers = `
+function recordProbe(kind, started, length) {
+  const probe = globalThis.__signatureProbe;
+  if (probe.phase) {
+    probe.events.push({
+      kind, length, phase: probe.phase, tab: probe.tab, operation: probe.operation,
+      ms: started === undefined ? null : performance.now() - started,
+    });
+  }
+}
+function measureProbe(kind, work, length) {
+  if (!globalThis.__signatureProbe.phase) return work();
+  const started = performance.now();
+  const result = work();
+  recordProbe(kind, started, length);
+  return result;
+}`;
+
 const result = await Bun.build({
   entrypoints: ["src/client/index.js"],
   target: "browser",
@@ -12,7 +35,7 @@ const result = await Bun.build({
         builder.onLoad(
           { filter: /[\\/](customSignatures|SignatureAssistPlugin)\.js$/ },
           async ({ path }) => {
-            let contents = await readFile(path, "utf8");
+            let contents = (await readFile(path, "utf8")).replaceAll("\r\n", "\n");
             if (path.split(/[\\/]/).at(-1) === "customSignatures.js") {
               for (const [kind, expression] of [
                 ["active", "indexCustomSignatures(source, tree)"],
@@ -22,23 +45,122 @@ const result = await Bun.build({
                 const marker = `...${expression}`;
                 if (!contents.includes(marker))
                   throw new Error(`Cache probe anchor missing: ${kind}`);
-                contents = contents.replace(
+                contents = replace(
+                  contents,
                   marker,
-                  `...measureIndex("${kind}", source.length, () => ${expression})`,
+                  `...measureProbe("${kind}", () => ${expression}, source.length)`,
                 );
               }
-              contents += `
-function measureIndex(kind, length, build) {
-  const probe = globalThis.__signatureProbe;
-  const started = performance.now();
-  const result = build();
-  if (probe.phase) probe.events.push({ kind, length, phase: probe.phase, ms: performance.now() - started });
-  return result;
-}`;
+              for (const [marker, replacement] of [
+                [
+                  "parser.parse(source)",
+                  'measureProbe("inactive-parse", () => parser.parse(source), source.length)',
+                ],
+                [
+                  "state.doc.toString()",
+                  'measureProbe("source-materialize", () => state.doc.toString(), state.doc.length)',
+                ],
+                [
+                  "editor.getTabCode(other)",
+                  'measureProbe("inactive-read", () => editor.getTabCode(other))',
+                ],
+                [
+                  "readSignatureJsdoc(source, declaration)",
+                  'measureProbe("jsdoc", () => readSignatureJsdoc(source, declaration))',
+                ],
+                [
+                  "if (!syntaxTreeAvailable(state)) return null;",
+                  'if (!syntaxTreeAvailable(state)) { recordProbe("tree-deferred"); return null; }',
+                ],
+                [
+                  "if (tree.length !== state.doc.length) return null;",
+                  'if (tree.length !== state.doc.length) { recordProbe("tree-partial"); return null; }',
+                ],
+                [
+                  "if (cache.get(tab)?.source !== source) {",
+                  'recordProbe(cache.get(tab)?.source === source ? "active-hit" : "active-miss");\n      if (cache.get(tab)?.source !== source) {',
+                ],
+                [
+                  "activeTree = tree;\n    }",
+                  'activeTree = tree;\n    } else { recordProbe("active-hit"); }',
+                ],
+                [
+                  "if (cache.get(other)?.source !== source) {",
+                  'recordProbe(cache.get(other)?.source === source ? "inactive-hit" : "inactive-miss");\n    if (cache.get(other)?.source !== source) {',
+                ],
+                [
+                  "  for (let node = tree.topNode.firstChild;",
+                  "  const collectStarted = performance.now();\n  for (let node = tree.topNode.firstChild;",
+                ],
+                [
+                  "  function block(node)",
+                  '  recordProbe("top-level", collectStarted, source.length);\n\n  function block(node)',
+                ],
+                ["  tree.iterate({", "  const walkStarted = performance.now();\n  tree.iterate({"],
+                [
+                  "  return { bindings, nested };",
+                  '  recordProbe("bindings-walk", walkStarted, source.length);\n  return { bindings, nested };',
+                ],
+              ])
+                contents = replace(contents, marker, replacement);
             } else {
+              for (const [marker, replacement] of [
+                [
+                  "const call = hydraCallAtCursor",
+                  'const call = measureProbe("call-context", () => hydraCallAtCursor',
+                ],
+                [
+                  "if (lookup === undefined) lookup = resolve(transaction.state);",
+                  'if (lookup === undefined) lookup = measureProbe("resolve", () => resolve(transaction.state));',
+                ],
+                [
+                  "return lookup ? lookup(name, position) : null;\n      });",
+                  'return lookup ? measureProbe("lookup", () => lookup(name, position)) : null;\n      }));',
+                ],
+                [
+                  "      )\n        return previous;\n\n      return {",
+                  '      ) {\n        recordProbe("tooltip-reuse");\n        return previous;\n      }\n\n      return {',
+                ],
+                [
+                  'const dom = document.createElement("div");',
+                  'const domStarted = performance.now();\n          const dom = document.createElement("div");',
+                ],
+                [
+                  "return { dom };",
+                  'recordProbe("tooltip-create", domStarted);\n          return { dom };',
+                ],
+                [
+                  "  return [\n    signature,",
+                  `  const extension = [
+    signature,`,
+                ],
+                [
+                  "  ];\n}\n\nexport function createSignatureAssistPlugin()",
+                  `  ];
+  const fieldRef = new WeakRef(extension[0]);
+  const focusRef = new WeakRef(extension[1].value);
+  const keysRef = new WeakRef(extension[2]);
+  globalThis.__signatureProbe.extensionStatus = (view) => {
+    const field = fieldRef.deref();
+    const focus = focusRef.deref();
+    const keys = keysRef.deref();
+    return {
+      field: Boolean(field && view.state.field(field, false) !== undefined),
+      focus: Boolean(focus && view.state.facet(EditorView.focusChangeEffect).includes(focus)),
+      keys: Boolean(keys && view.plugin(keys)),
+    };
+  };
+  return extension;
+}
+
+export function createSignatureAssistPlugin()`,
+                ],
+              ])
+                contents = replace(contents, marker, replacement);
               contents +=
                 "\nglobalThis.__signatureProbe.install = () => window.hydractrl.registerPlugin(createSignatureAssistPlugin());";
             }
+            contents += timingHelpers;
             return { contents, loader: "js" };
           },
         );
