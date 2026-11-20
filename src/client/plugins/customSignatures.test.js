@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { history, isolateHistory, redo, undo } from "@codemirror/commands";
 import { javascript } from "@codemirror/lang-javascript";
 import { EditorState } from "@codemirror/state";
 import { createCustomSignatureResolver } from "./customSignatures.js";
@@ -9,6 +10,94 @@ const setup = [
   "function lerp(a, b, t) { return a + (b - a) * t }",
   "const tide = (period, amplitude = 1) => Math.sin(time * 2 * Math.PI / period) * amplitude",
 ].join("\n");
+
+test("matches a fresh full index through edits, history, tab switches and slot replacements", () => {
+  const template = `/**
+ * Offsets the input.
+ * @param _value - Input value.
+ */
+function adjust(_value = 1, { amount } = {}, ...rest) { return _value; }
+adjust(|1, {}, 3);`;
+  let tab = "main";
+  const code = { main: "", setup };
+  const editor = { getCurrentTab: () => tab, getTabCode: (name) => code[name] };
+  const lookup = createCustomSignatureResolver(editor);
+  const extensions = [javascript(), history()];
+  let state = EditorState.create({ extensions });
+  const target = {
+    get state() {
+      return state;
+    },
+    dispatch(transaction) {
+      state = transaction.state;
+    },
+  };
+
+  function compareWithFreshIndex() {
+    const fresh = EditorState.create({
+      doc: state.doc,
+      selection: state.selection,
+      extensions: [javascript()],
+    });
+    const rebuilt = createCustomSignatureResolver(editor);
+    const actual = hydraCallAtCursor(state, lookup(state));
+    expect(actual).toEqual(hydraCallAtCursor(fresh, rebuilt(fresh)));
+    return actual;
+  }
+
+  function change(source, nextTab = tab) {
+    code[tab] = state.doc.toString();
+    tab = nextTab;
+    const anchor = source.indexOf("|");
+    const next = source.replace("|", "");
+    const previous = state.doc.toString();
+    let from = 0;
+    while (from < Math.min(previous.length, next.length) && previous[from] === next[from]) from++;
+    let to = previous.length;
+    let end = next.length;
+    while (to > from && end > from && previous[to - 1] === next[end - 1]) {
+      to--;
+      end--;
+    }
+    state = state.update({
+      changes: { from, to, insert: next.slice(from, end) },
+      selection: { anchor },
+      annotations: isolateHistory.of("full"),
+    }).state;
+    return compareWithFreshIndex();
+  }
+
+  expect(change(template).params[0]).toMatchObject({
+    name: "_value = 1",
+    documentation: "Input value.",
+  });
+  expect(change(template.replace("= 1,", "= 12,")).params[0].name).toBe("_value = 12");
+  expect(undo(target)).toBe(true);
+  expect(compareWithFreshIndex().params[0].name).toBe("_value = 1");
+  expect(redo(target)).toBe(true);
+  expect(compareWithFreshIndex().params[0].name).toBe("_value = 12");
+
+  for (const edited of [
+    template.replace("{ amount }", "[amount]").replace("...rest", "...args"),
+    template.replace("Input value.", "A revised input.\n * Continues here."),
+    template.replace("function adjust", "\nfunction adjust"),
+    template.replace("return _value;", "const adjust = false; return _value;"),
+    template.replace("adjust(|", "adjust = 0;\nadjust(|"),
+    template.replace("adjust(|", "function adjust(value) {}\nadjust(|"),
+    template.replace("function adjust", "function renamed"),
+    "adjust(|1, {}, 3);",
+    template.replace("= {},", "= [{,],"),
+    template,
+    "const osc = false;\nosc(|2);",
+    "osc(|2);",
+  ]) {
+    change(edited);
+  }
+
+  change(`${setup}\nclamp(|1, 0, 2);`, "setup");
+  change("const example = () => clamp(1, |0, 2);", "main");
+  change("const example = () => lerp(1, 0, |0.5);");
+});
 
 function fixture(sources = { setup, main: "" }) {
   const code = { ...sources };

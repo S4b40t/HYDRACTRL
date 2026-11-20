@@ -36,7 +36,7 @@ function parameterList(source, fn, docs) {
   }
 
   const list = fn.getChild("ParamList");
-  if (!list || fn.getChildren("⚠").length) return null;
+  if (!list || fn.getChild("⚠")) return null;
   if (list.firstChild?.name !== "(") {
     const binding = list.firstChild;
     return binding?.name === "VariableDefinition" && !binding.nextSibling
@@ -46,10 +46,9 @@ function parameterList(source, fn, docs) {
   if (list.lastChild?.name !== ")") return null;
 
   let invalid = false;
-  list.toTree().iterate({
-    enter: (node) => {
-      if (node.type.isError) invalid = true;
-    },
+  // Walk the existing parameter subtree without copying its Lezer buffer.
+  list.cursor().iterate((node) => {
+    if (node.type.isError) invalid = true;
   });
   if (invalid) return null;
 
