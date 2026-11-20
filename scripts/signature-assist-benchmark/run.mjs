@@ -1,17 +1,22 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { browserExecutable, classifyGpu, configuration } from "./platform.mjs";
+import { sha256, startServer, stopServer } from "./server.mjs";
 
-const pairs = Number(process.env.PAIRS || 5);
-const output = process.env.BENCH_OUTPUT || "/tmp/hydractrl-signature-benchmark.json";
-const baseUrl = process.env.HYDRACTRL_URL || "http://127.0.0.1:3000/app";
-const browserScript = new URL("./browser.js", import.meta.url).pathname;
-const temporary = await mkdtemp(path.join(os.tmpdir(), "hydractrl-bench-"));
-const probe = path.join(temporary, "probe.js");
+const config = configuration(process.env);
+const root = fileURLToPath(new URL("../../", import.meta.url));
+const browserScript = fileURLToPath(new URL("./browser.js", import.meta.url));
+const url = `http://127.0.0.1:${config.port}`;
+const bundleUrl = `${url}/assets/index.js`;
+const bun = process.env.BUN || "bun";
+const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+const timing = { warmMs: config.warmMs, idleMs: config.idleMs, editMs: config.editMs };
+const diagnosticTiming = { warmMs: timing.warmMs, idleMs: 1300, editMs: 1400 };
 
 function fixture(size, setupExtra, sketchExtra) {
   const helpers = (prefix, count) =>
@@ -50,179 +55,341 @@ function fixture(size, setupExtra, sketchExtra) {
 }
 
 const fixtures = [fixture("small", 4, 4), fixture("medium", 70, 60), fixture("stress", 520, 450)];
-const cgroup = async (name) => {
+
+async function cgroup(name) {
+  if (process.platform !== "linux") return null;
   try {
     return (await readFile(`/sys/fs/cgroup/${name}`, "utf8")).trim();
   } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-    return null;
+    if (error.code === "ENOENT") return null;
+    throw error;
   }
+}
+
+const native = {
+  label: "osc(frequency = 60, sync = 0.1, offset = 0)",
+  active: "frequency = 60",
+  summary: null,
+  argument: null,
 };
-const executablePath = process.env.CHROMIUM || "/usr/bin/chromium";
-const args = ["--no-sandbox", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"];
-const browser = await chromium.launch({ executablePath, args, headless: true });
-let raw = {
+const custom = {
+  label: "benchClamp(_value, min, max)",
+  active: "min",
+  summary: "Restricts a value to a specified range.",
+  argument: "Lower bound.",
+};
+
+const raw = {
+  schemaVersion: 2,
+  status: "running",
   provenance: {
-    url: baseUrl,
-    testedRevision: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
-    appBundleSha256: createHash("sha256")
-      .update(await readFile("public/assets/index.js"))
-      .digest("hex"),
-    chromium: browser.version(),
+    url: `${url}/app`,
+    config,
+    testedRevision: git("rev-parse", "HEAD"),
     node: process.version,
-    bun: execFileSync(process.env.BUN || "bun", ["--version"], { encoding: "utf8" }).trim(),
-    os: os.version(),
+    platform: process.platform,
+    os: os.release(),
     cpu: os.cpus()[0]?.model,
     visibleCpus: os.cpus().length,
+    memoryBytes: os.totalmem(),
     cpuMax: await cgroup("cpu.max"),
     memoryMax: await cgroup("memory.max"),
     cpuStatBefore: await cgroup("cpu.stat"),
     viewport: [1280, 720],
-    launchFlags: args,
-    pairs,
     playwrightVersion: JSON.parse(
-      await readFile("node_modules/playwright-core/package.json", "utf8"),
+      await readFile(path.join(root, "node_modules/playwright-core/package.json"), "utf8"),
     ).version,
   },
   fixtures,
   trials: [],
   diagnostics: [],
-  memory: [],
-  memoryControl: [],
+  heapTrials: [],
+  preflight: [],
 };
+await mkdir(path.dirname(config.output), { recursive: true });
+await writeFile(config.output, JSON.stringify(raw), { flag: "wx" });
+console.log(`Results: ${config.output}`);
+const temporary = await mkdtemp(path.join(os.tmpdir(), "hydractrl-bench-"));
+const probe = path.join(temporary, "probe.js");
+let probeHash;
+let browser;
+let server;
+let interrupted = false;
+
+function abort() {
+  interrupted = true;
+  server?.kill();
+  if (browser) void browser.close().catch(() => {});
+}
+process.once("SIGINT", abort);
+process.once("SIGTERM", abort);
+
+function checkInterrupted() {
+  if (interrupted) throw new Error("Benchmark interrupted");
+}
+
+async function verifyServer() {
+  checkInterrupted();
+  assert.ok(server?.exitCode === null && server.signalCode === null, "Benchmark server exited");
+  const response = await fetch(bundleUrl, { redirect: "error", signal: AbortSignal.timeout(5000) });
+  if (!response.ok) throw new Error(`Bundle request failed: ${response.status}`);
+  const served = sha256(Buffer.from(await response.arrayBuffer()));
+  assert.equal(served, raw.provenance.appBundleSha256, "Served bundle differs from local build");
+  return served;
+}
+
+async function validateTooltip(page, expected, stress) {
+  if (expected) {
+    try {
+      await page.waitForFunction(() => Boolean(window.signatureBenchmark.readHint()), null, {
+        timeout: stress ? 1500 : 8000,
+      });
+    } catch (error) {
+      if (!stress || error.name !== "TimeoutError") throw error;
+    }
+  }
+  const actual = await page.evaluate(() => window.signatureBenchmark.readHint());
+  if (!(stress && actual === null)) assert.deepEqual(actual, expected);
+  return actual;
+}
+
+async function freshPage(context, diagnostic) {
+  if (diagnostic) {
+    await context.route(bundleUrl, (route) =>
+      route.fulfill({ path: probe, contentType: "text/javascript" }),
+    );
+  }
+  const page = await context.newPage();
+  const errors = [];
+  page.setDefaultTimeout(25_000);
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.addInitScript({ path: browserScript });
+  const [response] = await Promise.all([
+    page.waitForResponse((response) => response.url() === bundleUrl && response.ok()),
+    page.goto(`${url}/app`),
+  ]);
+  assert.equal(
+    sha256(await response.body()),
+    diagnostic ? probeHash : raw.provenance.appBundleSha256,
+    "Browser received unexpected bundle",
+  );
+  await page.waitForFunction(
+    () => window.hydractrl?.plugins.getStatus("signature-assist") === "active",
+  );
+  return { page, errors };
+}
+
+function verifyGraphics(environment, label) {
+  environment.graphics = classifyGpu(environment.webgl, raw.provenance.gpu);
+  raw.preflight.push({ ...label, ...environment });
+  if (
+    config.mode === "hardware" &&
+    (environment.graphics.classification !== "hardware" || !environment.pageVisible)
+  ) {
+    throw new Error(
+      `HARDWARE PREFLIGHT FAILED: ${environment.graphics.classification}, visible=${environment.pageVisible}, renderer=${environment.webgl?.renderer}`,
+    );
+  }
+  if (config.mode === "software" && environment.graphics.classification !== "software") {
+    throw new Error(`Requested software renderer was not verified: ${environment.webgl?.renderer}`);
+  }
+}
 
 async function trial(fixture, autoRun, enabled, diagnostic = false) {
+  checkInterrupted();
   const context = await browser.newContext({
     viewport: { width: 1280, height: 720 },
     deviceScaleFactor: 1,
   });
   try {
-    if (diagnostic) {
-      await context.route("**/assets/index.js", (route) =>
-        route.fulfill({ path: probe, contentType: "text/javascript" }),
-      );
-    }
-    const page = await context.newPage();
-    page.setDefaultTimeout(25_000);
-    const errors = [];
-    page.on("pageerror", (error) => errors.push(error.message));
-    await page.addInitScript({ path: browserScript });
-    await page.goto(baseUrl);
-    await page.waitForFunction(
-      () => window.hydractrl?.plugins.getStatus("signature-assist") === "active",
-    );
-    const environment = await page.evaluate((config) => window.signatureBenchmark.init(config), {
+    const { page, errors } = await freshPage(context, diagnostic);
+    const environment = await page.evaluate((options) => window.signatureBenchmark.init(options), {
       fixture,
       enabled,
       autoRun,
+      timing: diagnostic ? diagnosticTiming : timing,
     });
+    verifyGraphics(environment, { fixture: fixture.size, enabled, autoRun, diagnostic });
+
+    console.log(
+      `${diagnostic ? "Diagnostic" : "Trial"} ${fixture.size}, plugin ${enabled ? "on" : "off"}, auto-run ${autoRun}, ${environment.graphics.classification}`,
+    );
+    const stress = fixture.size === "stress";
+    await page.evaluate(() => window.signatureBenchmark.cold());
+    const coldTooltip = await validateTooltip(page, enabled ? custom : null, stress);
     const typing = [];
     for (let index = 0; index < 3; index++) {
-      await page.evaluate((i) => window.signatureBenchmark.prepareTyping(i), index);
+      await page.evaluate((index) => window.signatureBenchmark.prepareTyping(index), index);
       await page.keyboard.type("2");
-      typing.push(await page.evaluate(() => window.signatureBenchmark.finishTyping()));
+      const measured = await page.evaluate(() => window.signatureBenchmark.finishTyping());
+      measured.settledTooltip = await validateTooltip(
+        page,
+        enabled ? (index ? custom : native) : null,
+        stress,
+      );
+      typing.push(measured);
     }
     const measurements = await page.evaluate(() => window.signatureBenchmark.run());
+    const slotTooltip = await validateTooltip(page, enabled ? native : null, stress);
     assert.deepEqual(errors, []);
+    assert.equal(measurements.modeAfter, enabled ? "active" : null);
+    if (config.mode === "hardware") {
+      assert.ok(
+        !measurements.visibility.some(({ state }) => state !== "visible"),
+        "Hardware benchmark page was hidden",
+      );
+    }
     assert.ok(measurements.phases.idle.draws > 0 && measurements.phases.editing.draws > 0);
+    assert.ok(
+      measurements.runs.some(({ phase }) => phase === "slot"),
+      "Slot loading did not run a sketch",
+    );
     assert.equal(
       measurements.runs.some(({ phase }) => phase === "after-edit" || phase === "editing"),
       autoRun,
     );
     if (!enabled) assert.ok(typing.every((item) => !item.tooltip));
-    return { fixture: fixture.size, autoRun, enabled, environment, typing, ...measurements };
+    return {
+      fixture: fixture.size,
+      autoRun,
+      enabled,
+      environment,
+      coldTooltip,
+      typing,
+      slotTooltip,
+      ...measurements,
+    };
   } finally {
     await context.close();
   }
 }
 
-async function memoryTrials(control) {
-  const samples = control ? raw.memoryControl : raw.memory;
-  const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+async function memoryTrial(pair, control) {
+  checkInterrupted();
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 720 },
+    deviceScaleFactor: 1,
+  });
   try {
-    await context.route("**/assets/index.js", (route) =>
-      route.fulfill({ path: probe, contentType: "text/javascript" }),
-    );
-    const page = await context.newPage();
-    await page.addInitScript({ path: browserScript });
-    await page.goto(baseUrl);
-    await page.waitForFunction(
-      () => window.hydractrl?.plugins.getStatus("signature-assist") === "active",
-    );
-    await page.evaluate(
-      (fixture) => window.signatureBenchmark.init({ fixture, enabled: false, autoRun: false }),
-      fixtures[1],
-    );
+    const { page, errors } = await freshPage(context, true);
+    const environment = await page.evaluate((options) => window.signatureBenchmark.init(options), {
+      fixture: fixtures[1],
+      enabled: false,
+      autoRun: false,
+      timing: diagnosticTiming,
+    });
+    verifyGraphics(environment, { fixture: "medium", heap: true, pair, control });
     const cdp = await context.newCDPSession(page);
     async function heap() {
       await cdp.send("HeapProfiler.collectGarbage");
       return cdp.send("Runtime.getHeapUsage");
     }
-    samples.push({ cycle: 0, disposed: await heap() });
-    for (let cycle = 1; cycle <= 10; cycle++) {
+    const samples = [{ cycle: 0, disposed: await heap() }];
+    for (let cycle = 1; cycle <= config.heapCycles; cycle++) {
       const installedState = await page.evaluate(
-        (off) => window.signatureBenchmark.cycle(true, off),
+        (control) => window.signatureBenchmark.cycle(true, control),
         control,
       );
-      if (!control) {
-        await page.waitForFunction(() => Boolean(document.querySelector(".cm-signature-assist")));
-        installedState.tooltip = true;
-      }
+      installedState.hint = await validateTooltip(page, control ? null : custom, false);
       assert.equal(installedState.mode, control ? null : "active");
       const installed = await heap();
       const disposedState = await page.evaluate(
-        (off) => window.signatureBenchmark.cycle(false, off),
+        (control) => window.signatureBenchmark.cycle(false, control),
         control,
       );
-      assert.equal(installedState.tooltip, !control);
+      assert.equal(disposedState.mode, null);
       assert.equal(disposedState.tooltip, false);
       samples.push({ cycle, installed, disposed: await heap(), installedState, disposedState });
     }
+    assert.deepEqual(errors, []);
+    return { pair, control, samples };
   } finally {
     await context.close();
   }
 }
 
-const appendControl = process.env.BENCH_APPEND_MEMORY_CONTROL === "1";
 try {
-  if (appendControl) {
-    const existing = JSON.parse(await readFile(output, "utf8"));
-    assert.equal(existing.provenance.appBundleSha256, raw.provenance.appBundleSha256);
-    assert.equal(existing.provenance.chromium, raw.provenance.chromium);
-    raw = existing;
-    raw.memoryControl = [];
-  } else {
-    for (const fixture of fixtures) {
-      for (const autoRun of fixture.size === "stress" ? [false] : [false, true]) {
-        for (let pair = 0; pair < pairs; pair++) {
-          for (const enabled of pair % 2 ? [true, false] : [false, true]) {
-            raw.trials.push({ pair: pair + 1, ...(await trial(fixture, autoRun, enabled)) });
-          }
-          await writeFile(output, JSON.stringify(raw));
-          console.log(`Completed ${fixture.size}, auto-run ${autoRun}: pair ${pair + 1}/${pairs}`);
+  if (config.revision)
+    assert.equal(
+      raw.provenance.testedRevision,
+      config.revision,
+      "Checkout does not match BENCH_REVISION",
+    );
+  assert.equal(git("status", "--porcelain", "--untracked-files=no"), "", "Use a clean checkout");
+  const executablePath = await browserExecutable(process.env);
+  raw.provenance.executablePath = executablePath;
+  raw.provenance.bun = execFileSync(bun, ["--version"], { cwd: root, encoding: "utf8" }).trim();
+  execFileSync(bun, ["run", "build"], { cwd: root, stdio: "inherit", windowsHide: true });
+  raw.provenance.appBundleSha256 = sha256(
+    await readFile(path.join(root, "public", "assets", "index.js")),
+  );
+  server = await startServer(bun, root, config.port);
+  raw.provenance.servedBundleSha256 = await verifyServer();
+  browser = await chromium.launch({
+    executablePath,
+    headless: config.headless,
+    args: config.args,
+    chromiumSandbox: config.mode === "hardware",
+    ignoreDefaultArgs: config.mode === "hardware" ? ["--enable-unsafe-swiftshader"] : undefined,
+    handleSIGINT: false,
+    handleSIGTERM: false,
+  });
+  raw.provenance.chromium = browser.version();
+  const cdp = await browser.newBrowserCDPSession();
+  try {
+    const { gpu } = await cdp.send("SystemInfo.getInfo");
+    raw.provenance.gpu = gpu;
+  } catch (error) {
+    raw.provenance.gpuError = error.message;
+  }
+  try {
+    const { arguments: browserArguments } = await cdp.send("Browser.getBrowserCommandLine");
+    raw.provenance.graphicsFlags = browserArguments.filter((argument) =>
+      /^--(?:[^=]*gpu|use-angle|use-gl|[^=]*swiftshader|no-sandbox|headless)/i.test(argument),
+    );
+  } catch (error) {
+    raw.provenance.graphicsFlagsError = error.message;
+  } finally {
+    await cdp.detach();
+  }
+
+  for (const fixture of fixtures) {
+    for (const autoRun of fixture.size === "stress" ? [false] : [false, true]) {
+      for (let pair = 0; pair < config.pairs; pair++) {
+        for (const enabled of pair % 2 ? [true, false] : [false, true]) {
+          raw.trials.push({ pair: pair + 1, ...(await trial(fixture, autoRun, enabled)) });
         }
+        await verifyServer();
+        await writeFile(config.output, JSON.stringify(raw));
       }
     }
   }
-  execFileSync(process.env.BUN || "bun", [
-    "scripts/signature-assist-benchmark/build-probe.mjs",
-    probe,
-  ]);
-  if (!appendControl) {
-    for (const fixture of fixtures) {
-      raw.diagnostics.push(await trial(fixture, false, true, true));
-      console.log(`Cache probe: ${fixture.size}`);
+  execFileSync(bun, ["scripts/signature-assist-benchmark/build-probe.mjs", probe], {
+    cwd: root,
+    windowsHide: true,
+  });
+  probeHash = sha256(await readFile(probe));
+  raw.provenance.diagnosticBundleSha256 = probeHash;
+  for (const fixture of fixtures) raw.diagnostics.push(await trial(fixture, false, true, true));
+  for (let pair = 0; pair < config.heapPairs; pair++) {
+    for (const control of pair % 2 ? [false, true] : [true, false]) {
+      raw.heapTrials.push(await memoryTrial(pair + 1, control));
+      await writeFile(config.output, JSON.stringify(raw));
     }
-    await memoryTrials(false);
-    raw.provenance.cpuStatAfter = await cgroup("cpu.stat");
   }
-  raw.provenance.memoryControlCpuBefore = await cgroup("cpu.stat");
-  await memoryTrials(true);
-  raw.provenance.memoryControlCpuAfter = await cgroup("cpu.stat");
-  console.log("Completed ten memory control cycles");
+  await verifyServer();
+  raw.status = "complete";
+} catch (error) {
+  raw.status = "failed";
+  raw.failure = error.message;
+  console.error(error);
+  process.exitCode = interrupted ? 130 : 1;
 } finally {
-  if (!appendControl) raw.provenance.cpuStatAfter ??= await cgroup("cpu.stat");
-  if (!appendControl || raw.memoryControl.length) await writeFile(output, JSON.stringify(raw));
-  await browser.close();
+  process.removeListener("SIGINT", abort);
+  process.removeListener("SIGTERM", abort);
+  await Promise.allSettled([browser?.close(), stopServer(server)]);
   await rm(temporary, { recursive: true, force: true });
+  raw.provenance.cpuStatAfter = await cgroup("cpu.stat");
+  await writeFile(config.output, JSON.stringify(raw));
+  console.log(`Benchmark ${raw.status}: ${config.output}`);
 }

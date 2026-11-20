@@ -5,7 +5,12 @@
   const pluginId = "signature-assist";
   const phases = {};
   const runs = [];
-  let renderer;
+  const visibility = [];
+  document.addEventListener("visibilitychange", () => {
+    visibility.push({ at: performance.now(), state: document.visibilityState });
+  });
+  let webgl;
+  let timing;
   let draws = 0;
   let fixture;
   let view;
@@ -24,9 +29,14 @@
           this.canvas.parentElement.firstElementChild === this.canvas
         ) {
           draws++;
-          if (!renderer) {
+          if (!webgl) {
             const debug = this.getExtension("WEBGL_debug_renderer_info");
-            renderer = this.getParameter(debug?.UNMASKED_RENDERER_WEBGL ?? this.RENDERER);
+            webgl = {
+              renderer: this.getParameter(debug?.UNMASKED_RENDERER_WEBGL ?? this.RENDERER),
+              vendor: this.getParameter(debug?.UNMASKED_VENDOR_WEBGL ?? this.VENDOR),
+              unmasked: Boolean(debug),
+              version: this.getParameter(this.VERSION),
+            };
           }
         }
         return draw.apply(this, args);
@@ -112,6 +122,7 @@
   window.signatureBenchmark = {
     async init(options) {
       fixture = options.fixture;
+      timing = options.timing;
       const host = window.hydractrl.plugins;
       if (!options.enabled) host.unregister(pluginId);
       if (host.getStatus(pluginId) !== (options.enabled ? "active" : null)) {
@@ -144,7 +155,7 @@
       if (autoRun.isEnabled() !== options.autoRun) autoRun.toggle();
       if (autoRun.isEnabled() !== options.autoRun)
         throw new Error("Auto-run mode did not take effect");
-      await wait(500);
+      await wait(timing.warmMs);
       const canvas = document.querySelector("#hydra-canvas canvas");
       if (!runs.length || !draws || canvas.width !== 1280 || canvas.height !== 720) {
         throw new Error(
@@ -152,12 +163,34 @@
         );
       }
       return {
-        renderer,
+        webgl,
+        pageVisible: document.visibilityState === "visible",
+        screen: [screen.width, screen.height],
+        devicePixelRatio,
         width: canvas.width,
         height: canvas.height,
         mode: host.getStatus(pluginId),
         autoRun: options.autoRun,
       };
+    },
+    readHint() {
+      const dom = hint();
+      if (!dom) return null;
+      return {
+        label: dom.querySelector(".cm-signature-label")?.textContent ?? null,
+        active: dom.querySelector("strong")?.textContent ?? null,
+        summary: dom.querySelector(".cm-signature-summary")?.textContent ?? null,
+        argument: dom.querySelector(".cm-signature-parameter")?.textContent ?? null,
+      };
+    },
+    async cold() {
+      view.focus();
+      const [, position] = positions();
+      start("cold");
+      view.dispatch({ selection: { anchor: position + 1 } });
+      await frame();
+      await frame();
+      end();
     },
     async prepareTyping(index) {
       const pos = positions()[index];
@@ -181,7 +214,7 @@
     async run() {
       await wait(400);
       start("idle");
-      await wait(800);
+      await wait(timing.idleMs);
       end();
 
       const targets = positions();
@@ -194,11 +227,23 @@
       end();
 
       start("editing");
-      for (let batch = 0; batch < 8; batch++) {
+      const cadence = 70;
+      const batches = Math.ceil(timing.editMs / cadence);
+      const scheduled = performance.now();
+      phases.editing.latenessMs = [];
+      for (let batch = 0; batch < batches; batch++) {
+        phases.editing.latenessMs.push(
+          Math.max(0, performance.now() - scheduled - batch * cadence),
+        );
         for (const position of targets) edit(position);
         // The real auto-run listener receives one key event per valid edit batch.
         view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true }));
-        await wait(70);
+        await wait(
+          Math.max(
+            0,
+            scheduled + Math.min((batch + 1) * cadence, timing.editMs) - performance.now(),
+          ),
+        );
       }
       end();
 
@@ -222,7 +267,14 @@
         await wait(60);
       }
       end();
-      return { phases, runs, cache: probe.events, visibleAfterSlot: Boolean(hint()) };
+      view.focus();
+      return {
+        phases,
+        runs,
+        cache: probe.events,
+        visibility,
+        modeAfter: window.hydractrl.plugins.getStatus(pluginId),
+      };
     },
     async cycle(install, control) {
       const host = window.hydractrl.plugins;

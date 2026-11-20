@@ -2,7 +2,9 @@
 
 The primary comparison launches the corrected application bundle in fresh Chromium contexts. The control unregisters Signature Assist through the existing plugin host. The treatment leaves it registered. The harness checks the plugin and auto-run states and holds the remaining app configuration constant.
 
-## Reproduce
+## Reproduce the historical run
+
+These were the commands for commit `c4e02af`. Use that revision in a separate checkout to run the original sub-second protocol. For the updated isolated launcher with sustained windows, see the [Windows validation runbook](SIGNATURE-ASSIST-WINDOWS.md) and select software mode to retain SwiftShader.
 
 From the checkout root, install the locked dependencies and serve the normal build.
 

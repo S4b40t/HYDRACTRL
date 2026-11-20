@@ -27,6 +27,23 @@ function frames(values) {
   };
 }
 
+function deltas(off, on) {
+  return Object.fromEntries(
+    ["median", "p95", "p99", "iqr", "fps", "longPercent"].flatMap((key) => {
+      if (!Number.isFinite(off[key]) || !Number.isFinite(on[key])) return [];
+      return [
+        [
+          key,
+          {
+            absolute: round(on[key] - off[key]),
+            percent: round(((on[key] - off[key]) / off[key]) * 100),
+          },
+        ],
+      ];
+    }),
+  );
+}
+
 function compare(trials, values, summarize = stats) {
   const off = trials.filter((trial) => !trial.enabled);
   const on = trials.filter((trial) => trial.enabled);
@@ -34,17 +51,36 @@ function compare(trials, values, summarize = stats) {
   const treatment = on.flatMap(values);
   const offP95 = quantile(baseline, 0.95);
   const onP95 = quantile(treatment, 0.95);
-  const pairDeltas = on.flatMap((trial) => {
+  const pairs = on.flatMap((trial) => {
     const control = off.find(({ pair }) => pair === trial.pair);
     if (!control || !values(control).length || !values(trial).length) return [];
-    return [quantile(values(trial), 0.95) - quantile(values(control), 0.95)];
+    const baselineValues = values(control);
+    const treatmentValues = values(trial);
+    const offStats = summarize(baselineValues);
+    const onStats = summarize(treatmentValues);
+    const baselineP95 = quantile(baselineValues, 0.95);
+    const treatmentP95 = quantile(treatmentValues, 0.95);
+    return [
+      {
+        pair: trial.pair,
+        off: offStats,
+        on: onStats,
+        deltas: deltas(offStats, onStats),
+        deltaP95: round(treatmentP95 - baselineP95),
+        deltaP95Percent: round((treatmentP95 / baselineP95 - 1) * 100),
+      },
+    ];
   });
+  const offStats = summarize(baseline);
+  const onStats = summarize(treatment);
   return {
-    off: summarize(baseline),
-    on: summarize(treatment),
+    off: offStats,
+    on: onStats,
+    deltas: deltas(offStats, onStats),
     deltaP95: round(onP95 - offP95),
     deltaP95Percent: round(((onP95 - offP95) / offP95) * 100),
-    pairedDeltaP95: pairDeltas.map(round),
+    pairs,
+    pairedDeltaP95: pairs.map(({ deltaP95 }) => deltaP95),
     pairedOver5Percent: on.filter((trial) => {
       const control = off.find(({ pair }) => pair === trial.pair);
       return control && quantile(values(trial), 0.95) > 1.05 * quantile(values(control), 0.95);
@@ -60,9 +96,9 @@ for (const fixture of raw.fixtures) {
     );
     if (!trials.length) continue;
     const dispatch = Object.fromEntries(
-      ["cursor", "editing", "tab", "slot"].map((phase) => [
+      ["cold", "cursor", "editing", "tab", "slot"].map((phase) => [
         phase,
-        compare(trials, (trial) => trial.phases[phase].dispatchMs),
+        compare(trials, (trial) => trial.phases[phase]?.dispatchMs ?? []),
       ]),
     );
     const frameTiming = Object.fromEntries(
@@ -90,6 +126,9 @@ for (const fixture of raw.fixtures) {
           ),
           tooltipVisible: trials.filter((trial) => trial.enabled && trial.typing[index].tooltip)
             .length,
+          tooltipSettled: trials.filter(
+            (trial) => trial.enabled && trial.typing[index].settledTooltip,
+          ).length,
         },
       ]),
     );
@@ -107,7 +146,7 @@ for (const fixture of raw.fixtures) {
 const cache = raw.diagnostics.map((trial) => ({
   fixture: trial.fixture,
   phases: Object.fromEntries(
-    ["cursor", "editing", "tab", "slot"].map((phase) => [
+    ["cold", "cursor", "editing", "tab", "slot"].map((phase) => [
       phase,
       Object.fromEntries(
         ["active", "inactive"].map((kind) => [
@@ -132,12 +171,106 @@ const heapSamples = (samples) =>
     ),
   }));
 
+function referenceCadence(trial) {
+  return Object.fromEntries(
+    ["idle", "editing"].map((phase) => {
+      const data = trial.phases[phase];
+      const result = frames(data.intervalsMs);
+      const minimumSamples = Math.max(600, Math.floor(data.durationMs * 0.05));
+      const stable =
+        result.n >= minimumSamples &&
+        result.fps >= 58 &&
+        result.fps <= 62 &&
+        result.median >= 15.5 &&
+        result.median <= 17.8 &&
+        result.longPercent <= 1;
+      return [phase, { ...result, minimumSamples, stable }];
+    }),
+  );
+}
+
+const reference = raw.trials
+  .filter((trial) => !trial.enabled && trial.fixture !== "stress")
+  .map((trial) => ({
+    fixture: trial.fixture,
+    autoRun: trial.autoRun,
+    pair: trial.pair,
+    ...referenceCadence(trial),
+  }));
+const treatmentSamples = raw.trials
+  .filter((trial) => trial.enabled && trial.fixture !== "stress")
+  .map((trial) => ({
+    fixture: trial.fixture,
+    autoRun: trial.autoRun,
+    pair: trial.pair,
+    ...referenceCadence(trial),
+  }));
+const eligibility =
+  raw.status === "complete" &&
+  raw.provenance.config?.mode === "hardware" &&
+  raw.provenance.config?.profile === "full" &&
+  reference.length === 4 * raw.provenance.config.pairs &&
+  reference.every(({ idle, editing }) => idle.stable && editing.stable) &&
+  treatmentSamples.length === reference.length &&
+  treatmentSamples.every(
+    ({ idle, editing }) => idle.n >= idle.minimumSamples && editing.n >= editing.minimumSamples,
+  );
+const representative = groups.filter((group) => group.fixture !== "stress");
+const editorFlags = representative.flatMap((group) => {
+  const operations = {
+    editing: group.dispatch.editing,
+    ...Object.fromEntries(
+      Object.entries(group.typing).map(([name, value]) => [name, value.dispatch]),
+    ),
+  };
+  return Object.entries(operations)
+    .filter(([, result]) => result.deltaP95 > 2)
+    .map(([operation, result]) => ({
+      fixture: group.fixture,
+      autoRun: group.autoRun,
+      operation,
+      deltaP95: result.deltaP95,
+    }));
+});
+const frameFlags = representative.flatMap((group) =>
+  Object.entries(group.frameTiming)
+    .filter(
+      ([phase, result]) =>
+        phase !== "after-edit" && result.pairedOver5Percent >= Math.ceil((group.trials / 2) * 0.8),
+    )
+    .map(([phase, result]) => ({
+      fixture: group.fixture,
+      autoRun: group.autoRun,
+      phase,
+      pairsOver5Percent: result.pairedOver5Percent,
+    })),
+);
+const heapTrials = (raw.heapTrials ?? []).map(({ pair, control, samples }) => ({
+  pair,
+  control,
+  samples: heapSamples(samples),
+  postGcGrowthKiB: round((samples.at(-1).disposed.usedSize - samples[0].disposed.usedSize) / 1024),
+}));
+
 console.log(
   JSON.stringify(
     {
+      experimentStatus: raw.status ?? "historical",
+      failure: raw.failure ?? null,
+      mode: raw.provenance.config?.mode ?? "historical",
+      reference60Hz: {
+        status: eligibility ? "eligible-for-review" : "inconclusive",
+        controls: reference,
+        treatmentSamples,
+      },
+      representativeReviewFlags: {
+        editorOver2ms: editorFlags,
+        repeatableFrameP95Over5Percent: frameFlags,
+      },
       groups,
       cache,
-      memory: heapSamples(raw.memory),
+      heapTrials,
+      memory: heapSamples(raw.memory ?? []),
       memoryControl: heapSamples(raw.memoryControl ?? []),
     },
     null,

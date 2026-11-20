@@ -10,10 +10,10 @@ const result = await Bun.build({
       name: "signature-assist-diagnostic",
       setup(builder) {
         builder.onLoad(
-          { filter: /\/(customSignatures|SignatureAssistPlugin)\.js$/ },
+          { filter: /[\\/](customSignatures|SignatureAssistPlugin)\.js$/ },
           async ({ path }) => {
             let contents = await readFile(path, "utf8");
-            if (path.endsWith("/customSignatures.js")) {
+            if (path.split(/[\\/]/).at(-1) === "customSignatures.js") {
               for (const [kind, expression] of [
                 ["active", "indexCustomSignatures(source, tree)"],
                 ["inactive", "indexCustomSignatures(source, parser.parse(source))"],
