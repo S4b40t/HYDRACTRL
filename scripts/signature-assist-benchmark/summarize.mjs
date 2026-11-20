@@ -92,6 +92,14 @@ const groups = [];
 const setupPhases = ["body", "parameter", "declaration", "jsdoc", "recovery"].map(
   (kind) => `setup-${kind}`,
 );
+
+function phaseData(trial, phase) {
+  if (phase !== "setup-editing") return trial.phases[phase];
+  return {
+    intervalsMs: setupPhases.flatMap((name) => trial.phases[name].intervalsMs),
+    durationMs: setupPhases.reduce((sum, name) => sum + trial.phases[name].durationMs, 0),
+  };
+}
 for (const fixture of raw.fixtures) {
   for (const autoRun of [false, true]) {
     const trials = raw.trials.filter(
@@ -108,9 +116,14 @@ for (const fixture of raw.fixtures) {
       ]),
     );
     const frameTiming = Object.fromEntries(
-      ["idle", "editing", "after-edit", ...availableSetupPhases].map((phase) => [
+      [
+        "idle",
+        "editing",
+        "after-edit",
+        ...(availableSetupPhases.length ? ["setup-editing", ...availableSetupPhases] : []),
+      ].map((phase) => [
         phase,
-        compare(trials, (trial) => trial.phases[phase]?.intervalsMs ?? [], frames),
+        compare(trials, (trial) => phaseData(trial, phase)?.intervalsMs ?? [], frames),
       ]),
     );
     const typing = Object.fromEntries(
@@ -203,13 +216,7 @@ const heapSamples = (samples) =>
 function referenceCadence(trial) {
   return Object.fromEntries(
     ["idle", "editing", ...(trial.phases["setup-body"] ? ["setup-editing"] : [])].map((phase) => {
-      const data =
-        phase === "setup-editing"
-          ? {
-              intervalsMs: setupPhases.flatMap((name) => trial.phases[name].intervalsMs),
-              durationMs: setupPhases.reduce((sum, name) => sum + trial.phases[name].durationMs, 0),
-            }
-          : trial.phases[phase];
+      const data = phaseData(trial, phase);
       const result = frames(data.intervalsMs);
       const minimumSamples = Math.max(600, Math.floor(data.durationMs * 0.05));
       const stable =
@@ -288,7 +295,7 @@ const frameFlags = representative.flatMap((group) =>
   Object.entries(group.frameTiming)
     .filter(
       ([phase, result]) =>
-        ["idle", "editing", ...setupPhases].includes(phase) &&
+        ["idle", "editing", "setup-editing"].includes(phase) &&
         result.pairedOver5Percent >= Math.ceil((group.trials / 2) * 0.8),
     )
     .map(([phase, result]) => ({
