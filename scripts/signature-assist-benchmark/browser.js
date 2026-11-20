@@ -107,7 +107,8 @@
     return {
       field: Boolean(field && view.state.field(field, false) !== undefined),
       focus: Boolean(focus && view.state.facet(probe.focusEffect).includes(focus)),
-      keys: Boolean(keys && view.plugin(keys)),
+      // view.plugin() memoizes misses and would keep a disposed plugin definition alive.
+      keys: Boolean(keys && view.plugins.some(({ spec }) => spec === keys)),
     };
   }
 
