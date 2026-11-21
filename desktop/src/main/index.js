@@ -427,9 +427,16 @@ function main() {
   app.on("will-quit", (event) => {
     if (shutdownDone) return;
     event.preventDefault();
-    shutdown().finally(() => app.quit());
+    shutdown().finally(() => {
+      // The test window can close while Electron is already handling quit.
+      // Its resources have been stopped here, so finish without re-entering quit.
+      if (desktopTest) app.exit(0);
+      else app.quit();
+    });
   });
-  app.on("window-all-closed", () => app.quit());
+  app.on("window-all-closed", () => {
+    if (!desktopTest || !quitting) app.quit();
+  });
 
   app.whenReady().then(async () => {
     try {
