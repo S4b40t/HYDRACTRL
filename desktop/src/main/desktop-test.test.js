@@ -21,7 +21,7 @@ test("a marked package requires its own profile before the app can take the lock
       },
     };
     const executable = join(directory, "HYDRACTRL.exe");
-    expect(() => startDesktopTest(app, executable)).toThrow("launcher");
+    expect(() => startDesktopTest(app, executable)).toThrow("Launch Signature Assist TEST.cmd");
     switches["signature-assist-test-profile"] = "main";
     switches["user-data-dir"] = directory;
     expect(() => startDesktopTest(app, executable)).toThrow("dedicated user-data");

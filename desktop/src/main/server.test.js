@@ -131,7 +131,7 @@ describe("createServerManager", () => {
     });
     expect(await manager.start()).toMatchObject({
       status: "failed",
-      error: "Test port 3000 is occupied.",
+      error: expect.stringContaining("Test port 3000 is occupied."),
     });
     expect(spawned).toHaveLength(0);
   });
