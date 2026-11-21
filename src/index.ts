@@ -70,6 +70,7 @@ if (media) {
 // PORT picks the port (default 3000), HOST the interface (default: all).
 const port = Number.parseInt(process.env.PORT || "", 10) || 3000;
 const hostname = process.env.HOST?.trim() || undefined;
+const testNonce = process.env.HYDRACTRL_DESKTOP_TEST_NONCE;
 const listenOptions = hostname ? { port, hostname } : port;
 
 // Create Elysia server
@@ -79,7 +80,12 @@ const app = new Elysia()
   // Chrome-less render head that mirrors the UI over the output socket
   .get("/output", () => html(outputHtml))
   // Lets the client tell this server apart from a static host
-  .get("/api/capabilities", () => ({ name: "hydractrl", outputSync: true, version: VERSION }))
+  .get("/api/capabilities", () => ({
+    name: "hydractrl",
+    outputSync: true,
+    version: VERSION,
+    ...(testNonce ? { testNonce } : {}),
+  }))
   .ws("/ws/output", {
     open(ws) {
       outputHub.connect(ws.id, (text) => {

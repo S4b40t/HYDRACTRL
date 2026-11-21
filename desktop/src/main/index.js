@@ -10,6 +10,7 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import net from "node:net";
+import { join } from "node:path";
 import {
   BrowserWindow,
   Menu,
@@ -33,6 +34,7 @@ import {
   resolvePaths,
   serverCommand,
 } from "./config.js";
+import { TEST_SENDER, startDesktopTest, testSettings, verifyTestBundle } from "./desktop-test.js";
 import { IPC, registerIpc } from "./ipc.js";
 import { createLogger, describeError } from "./log.js";
 import { MAX_IMPORT_FILES, createMediaLibrary } from "./media.js";
@@ -40,18 +42,32 @@ import { buildMenuTemplate } from "./menu.js";
 import { createOutputManager } from "./output.js";
 import { createSecurityPolicy, isAllowedExternalUrl } from "./security.js";
 import { createServerManager } from "./server.js";
-import { FRAME_RATES, RESOLUTION_PRESETS, createSettingsStore } from "./settings.js";
+import {
+  FRAME_RATES,
+  RESOLUTION_PRESETS,
+  createSettingsStore,
+  validateSettings,
+} from "./settings.js";
 import { createWindowStateStore } from "./windowState.js";
 import { createWindowManager } from "./windows.js";
 
 app.setName(APP_NAME);
-if (process.platform === "win32") app.setAppUserModelId(APP_ID);
+let desktopTest;
+let startupAllowed = true;
+try {
+  desktopTest = startDesktopTest(app);
+} catch (error) {
+  startupAllowed = false;
+  dialog.showErrorBox("HYDRACTRL Signature Assist TEST", error.message);
+  app.exit(2);
+}
+if (desktopTest) app.setName(TEST_SENDER);
+if (process.platform === "win32" && !desktopTest && startupAllowed) app.setAppUserModelId(APP_ID);
 
 // One running copy: a second launch focuses the existing window instead
-if (!app.requestSingleInstanceLock()) {
-  app.quit();
-} else {
-  main();
+if (startupAllowed) {
+  if (!app.requestSingleInstanceLock()) app.quit();
+  else main();
 }
 
 function main() {
@@ -73,14 +89,27 @@ function main() {
     `${APP_NAME} desktop ${app.getVersion()} starting (${packaged ? "packaged" : "dev"}, ` +
       `electron ${process.versions.electron}, ${process.platform} ${process.arch})`,
   );
+  if (desktopTest)
+    log.info(`Signature Assist TEST ${desktopTest.revision}, profile: ${desktopTest.profilePath}`);
 
   process.on("uncaughtException", (error) => log.error(`uncaught: ${describeError(error)}`));
   process.on("unhandledRejection", (reason) =>
     log.error(`unhandled rejection: ${describeError(reason)}`),
   );
 
-  const settingsStore = createSettingsStore({ filePath: paths.settingsFile, fs, log });
+  const settingsStore = createSettingsStore({
+    filePath: paths.settingsFile,
+    fs,
+    log,
+    ...(desktopTest
+      ? {
+          defaults: validateSettings({ output: { width: 1280, height: 720, includeAlpha: true } }),
+          constrain: (settings) => testSettings(settings, desktopTest),
+        }
+      : {}),
+  });
   settingsStore.load();
+  if (desktopTest && !fs.existsSync(paths.settingsFile)) settingsStore.save();
   const windowStateStore = createWindowStateStore({ filePath: paths.windowStateFile, fs, log });
   // Images and videos dropped on the editor go to the media folder, which the
   // server we spawn serves at /media/
@@ -124,7 +153,8 @@ function main() {
   function getAppState() {
     return {
       app: {
-        name: APP_NAME,
+        name: desktopTest ? TEST_SENDER : APP_NAME,
+        ...(desktopTest ? { testRevision: desktopTest.revision } : {}),
         version: app.getVersion(),
         platform: process.platform,
         packaged,
@@ -328,17 +358,18 @@ function main() {
     }
   }
 
+  function canListen(port) {
+    return new Promise((resolve) => {
+      const probe = net.createServer();
+      probe.unref();
+      probe.once("error", () => resolve(false));
+      probe.listen({ port, host: "127.0.0.1" }, () => probe.close(() => resolve(true)));
+    });
+  }
   function findFreePort(start) {
-    const tryPort = (port) =>
-      new Promise((resolve) => {
-        const probe = net.createServer();
-        probe.unref();
-        probe.once("error", () => resolve(false));
-        probe.listen({ port, host: "127.0.0.1" }, () => probe.close(() => resolve(true)));
-      });
     return (async () => {
       for (let port = start; port < start + 50; port++) {
-        if (await tryPort(port)) return port;
+        if (await canListen(port)) return port;
       }
       throw new Error(`no free port found between ${start} and ${start + 49}`);
     })();
@@ -403,6 +434,9 @@ function main() {
   app.whenReady().then(async () => {
     try {
       security.installOnSession(session.defaultSession);
+      if (desktopTest && session.defaultSession.storagePath !== desktopTest.profilePath) {
+        throw new Error("Chromium storage did not resolve to the test profile.");
+      }
       if (process.platform === "darwin") {
         app.setAboutPanelOptions({
           applicationName: APP_NAME,
@@ -416,7 +450,7 @@ function main() {
       windows = createWindowManager({
         BrowserWindow,
         screen,
-        appName: APP_NAME,
+        appName: desktopTest ? `${TEST_SENDER} — ${desktopTest.revision.slice(0, 7)}` : APP_NAME,
         preloadPath: PRELOAD_PATH,
         rendererDir: RENDERER_DIR,
         iconPath: ICON_PATH,
@@ -502,6 +536,34 @@ function main() {
         spawn,
         fetch: globalThis.fetch,
         findFreePort,
+        ...(desktopTest
+          ? {
+              isolated: {
+                canListen,
+                async verify(url) {
+                  const asset = join(
+                    process.resourcesPath,
+                    "server",
+                    "hydractrl-public",
+                    "assets",
+                    "index.js",
+                  );
+                  const expected =
+                    "df17224268f1da046489749f7bc58dd37aaf4130a62763b3bfd346388b5944c5";
+                  verifyTestBundle(expected, fs.readFileSync(asset));
+                  const response = await fetch(`${url}/assets/index.js`, {
+                    redirect: "error",
+                    signal: AbortSignal.timeout(5000),
+                    cache: "no-store",
+                  });
+                  if (!response.ok)
+                    throw new Error("Could not read the test server client bundle.");
+                  verifyTestBundle(expected, Buffer.from(await response.arrayBuffer()));
+                  log.info(`Verified packaged and served client SHA-256 ${expected}`);
+                },
+              },
+            }
+          : {}),
         log,
         onState: handleServerState,
         getEnv: () => ({ HYDRACTRL_MEDIA_DIR: mediaFolder() }),

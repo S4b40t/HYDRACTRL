@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 /**
  * Server manager: makes sure a HYDRACTRL server is reachable.
  *
@@ -33,7 +34,7 @@ export function isConnectionRefused(error) {
  * What is listening on a port: "hydractrl" (a HYDRACTRL server), "busy"
  * (something else, or unknown), or "free" (nothing).
  */
-export async function probeServer(fetchImpl, port, timeoutMs = 1500) {
+export async function probeServer(fetchImpl, port, timeoutMs = 1500, nonce = null) {
   try {
     const signal =
       typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
@@ -42,12 +43,13 @@ export async function probeServer(fetchImpl, port, timeoutMs = 1500) {
     const response = await fetchImpl(`http://127.0.0.1:${port}/api/capabilities`, {
       signal,
       cache: "no-store",
+      ...(nonce ? { redirect: "error" } : {}),
     });
     if (response.ok) {
       const type = response.headers.get("content-type") || "";
       if (type.includes("application/json")) {
         const body = await response.json();
-        if (body && body.name === "hydractrl") return "hydractrl";
+        if (body?.name === "hydractrl" && (!nonce || body.testNonce === nonce)) return "hydractrl";
       }
     }
     return "busy";
@@ -65,6 +67,7 @@ export function createServerManager({
   spawn,
   fetch: fetchImpl,
   findFreePort,
+  isolated,
   log,
   onState = () => {},
   /** Extra environment for each spawn, read when the server starts. */
@@ -223,7 +226,7 @@ export function createServerManager({
     scheduleRestart(reason);
   }
 
-  async function waitReady(p, exited) {
+  async function waitReady(p, exited, nonce) {
     const deadline = now() + readyTimeoutMs;
     let exitResult = null;
     exited.then((result) => {
@@ -236,7 +239,7 @@ export function createServerManager({
           : `exited with code ${exitResult.code ?? exitResult.signal} before it was ready`;
         throw new Error(`server ${detail}`);
       }
-      if ((await probeServer(fetchImpl, p)) === "hydractrl") return true;
+      if ((await probeServer(fetchImpl, p, 1500, nonce)) === "hydractrl") return true;
       if (now() > deadline) {
         await killChild(child);
         throw new Error(`server did not become ready within ${Math.round(readyTimeoutMs / 1000)}s`);
@@ -251,12 +254,14 @@ export function createServerManager({
     if (command.prepare) await runPrepare(command.prepare);
     if (stopping) return;
 
+    const nonce = isolated ? randomUUID() : undefined;
     const env = {
       ...baseEnv,
       ...(command.env || {}),
       ...getEnv(),
       PORT: String(p),
       HOST: allowNetwork ? "0.0.0.0" : "127.0.0.1",
+      ...(nonce ? { HYDRACTRL_DESKTOP_TEST_NONCE: nonce } : {}),
     };
     log.info(
       `starting server: ${command.file} ${command.args.join(" ")} on port ${p} (${
@@ -278,8 +283,16 @@ export function createServerManager({
     const exited = waitForExit(proc);
     exited.then((result) => onChildExit(proc, result));
 
-    const ready = await waitReady(p, exited);
+    const ready = await waitReady(p, exited, nonce);
     if (ready) {
+      if (isolated) {
+        try {
+          await isolated.verify(urlFor(p));
+        } catch (error) {
+          await killChild(proc);
+          throw error;
+        }
+      }
       set({ status: SERVER_STATUS.ready, error: null, since: now() });
       log.info(`server ready at ${urlFor(p)}`);
     }
@@ -315,6 +328,11 @@ export function createServerManager({
     clearRestartTimer();
     try {
       set({ status: SERVER_STATUS.probing, error: null });
+      if (isolated) {
+        if (!(await isolated.canListen(port))) throw new Error(`Test port ${port} is occupied.`);
+        await launch(port);
+        return getState();
+      }
       const found = await probeServer(fetchImpl, port);
       if (found === "hydractrl") {
         attach(port);

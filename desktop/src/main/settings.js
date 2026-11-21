@@ -194,18 +194,24 @@ const silentLog = { info() {}, warn() {}, error() {} };
  * JSON-file settings store with atomic writes (temp file + rename), so a crash
  * mid-write can never leave a half-written settings file behind.
  */
-export function createSettingsStore({ filePath, fs, log = silentLog }) {
-  let current = validateSettings({}, DEFAULT_SETTINGS);
+export function createSettingsStore({
+  filePath,
+  fs,
+  log = silentLog,
+  defaults = DEFAULT_SETTINGS,
+  constrain = (value) => value,
+}) {
+  let current = constrain(validateSettings({}, defaults));
 
   function load() {
     try {
       if (fs.existsSync(filePath)) {
         const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-        current = validateSettings(parsed, DEFAULT_SETTINGS);
+        current = constrain(validateSettings(parsed, defaults));
       }
     } catch (error) {
       log.warn(`settings: could not read ${filePath} (${error.message}); using defaults`);
-      current = validateSettings({}, DEFAULT_SETTINGS);
+      current = constrain(validateSettings({}, defaults));
     }
     return current;
   }
@@ -226,7 +232,7 @@ export function createSettingsStore({ filePath, fs, log = silentLog }) {
   /** Apply a partial update. Returns the new settings and what changed. */
   function update(partial) {
     const previous = current;
-    const next = validateSettings(partial, previous);
+    const next = constrain(validateSettings(partial, previous));
     const changed = changedKeys(previous, next);
     current = next;
     if (changed.length > 0) save();

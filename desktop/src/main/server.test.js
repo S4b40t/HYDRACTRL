@@ -56,7 +56,14 @@ class FakeChild extends EventEmitter {
   }
 }
 
-function setup({ ports = {}, readyAfterSpawn = true, command, getEnv, log = silentLog } = {}) {
+function setup({
+  ports = {},
+  readyAfterSpawn = true,
+  command,
+  getEnv,
+  isolated,
+  log = silentLog,
+} = {}) {
   const spawned = [];
   const states = [];
   let nextPid = 100;
@@ -76,6 +83,7 @@ function setup({ ports = {}, readyAfterSpawn = true, command, getEnv, log = sile
     },
     fetch: fakeFetch(ports),
     findFreePort: async (start) => start + 4,
+    isolated,
     log,
     onState: (state) => states.push(state),
     getEnv,
@@ -111,6 +119,27 @@ describe("probeServer", () => {
 });
 
 describe("createServerManager", () => {
+  test("an isolated server cannot attach or fall back when its port is occupied", async () => {
+    const { manager, spawned } = setup({
+      ports: { 3000: "hydractrl" },
+      isolated: {
+        canListen: async () => false,
+        verify: () => {
+          throw new Error("unexpected verification");
+        },
+      },
+    });
+    expect(await manager.start()).toMatchObject({
+      status: "failed",
+      error: "Test port 3000 is occupied.",
+    });
+    expect(spawned).toHaveLength(0);
+  });
+
+  test("a matching server name cannot satisfy isolated child verification", async () => {
+    const found = fakeFetch({ 43129: "hydractrl" });
+    expect(await probeServer(found, 43129, 1500, "owned-child")).toBe("busy");
+  });
   test("attaches to a server that is already running", async () => {
     const { manager, spawned } = setup({ ports: { 3000: "hydractrl" } });
     const state = await manager.start();
