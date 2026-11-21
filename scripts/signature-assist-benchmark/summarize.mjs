@@ -313,6 +313,30 @@ const heapTrials = (raw.heapTrials ?? []).map(({ pair, control, samples, beforeW
   postGcGrowthKiB: round((samples.at(-1).disposed.usedSize - samples[0].disposed.usedSize) / 1024),
 }));
 
+const toKiB = (sample) => sample.usedSize / 1024;
+const attribution = raw.attributionTrials?.map((trial) => {
+  const { set, arm, samples, afterDisposal, runs, draws } = trial;
+  const warm = samples[0];
+  const last = samples.at(-1);
+  const late = samples.find((sample) => sample.cycle === last.cycle - 40) ?? warm;
+  return {
+    set,
+    arm,
+    runs,
+    draws,
+    settledKiB: samples.map(({ cycle, inUse, settled }) => ({
+      cycle,
+      inUse: round(toKiB(inUse)),
+      settled: round(toKiB(settled)),
+    })),
+    settledGrowthKiB: round(toKiB(last.settled) - toKiB(warm.settled)),
+    lateKiBPerCycle: round((toKiB(last.settled) - toKiB(late.settled)) / (last.cycle - late.cycle)),
+    afterDisposalKiB: round(toKiB(afterDisposal)),
+    afterDisposalGrowthKiB: round(toKiB(afterDisposal) - toKiB(warm.settled)),
+    disposalDeltaKiB: round(toKiB(afterDisposal) - toKiB(last.settled)),
+  };
+});
+
 console.log(
   JSON.stringify(
     {
@@ -333,6 +357,7 @@ console.log(
       groups,
       cache,
       heapTrials,
+      attribution,
       memory: heapSamples(raw.memory ?? []),
       memoryControl: heapSamples(raw.memoryControl ?? []),
     },

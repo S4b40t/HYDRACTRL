@@ -130,3 +130,22 @@ The diagnostic bundle runs after the primary trials and records counts and timin
 For a candidate comparison, pin the candidate revision and repeat the same profile with fresh names such as `targeted-candidate.json` and `candidate-snapshots`. Verify the fixture hashes, renderer, refresh rate and power conditions against the baseline. Review each revision's registered/unregistered results by operation and auto-run setting. The 60 Hz check combines the Setup edit segments into one sample window. Per-edit-type frame distributions remain available for diagnosis.
 
 To repeat just the matched heap experiment, set `BENCH_STAGE=heap` with the targeted profile and use fresh JSON and snapshot paths. Clear the variable before running the primary matrix again.
+
+### Three-arm memory attribution
+
+Use `BENCH_STAGE=heap-attribution` with the reviewed local fixture and the usual pinned revision, port, and browser settings. Use `BENCH_PROFILE=targeted-pilot` to check all three arms and snapshot capture with two warm-up and two measured cycles. For measurements, use fresh output names and the targeted profile.
+
+```powershell
+$env:BENCH_PROFILE = 'targeted'
+$env:BENCH_STAGE = 'heap-attribution'
+$env:BENCH_OUTPUT = Join-Path $PrivateBench 'three-arm-memory.json'
+$env:BENCH_HEAP_SNAPSHOTS_DIR = Join-Path $PrivateBench 'three-arm-memory-snapshots'
+node scripts/signature-assist-benchmark/run.mjs
+if ($LASTEXITCODE -ne 0) { throw "Inspect partial results in $env:BENCH_OUTPUT" }
+node scripts/signature-assist-benchmark/summarize.mjs $env:BENCH_OUTPUT |
+  Set-Content -Encoding utf8 (Join-Path $PrivateBench 'three-arm-memory-summary.json')
+```
+
+The absent arm unregisters the app's default Signature Assist at initialization. The continuous arm keeps that registration through all cycles and disposes once after the final checkpoint. The lifecycle arm unregisters at initialization and registers and disposes each cycle. Each arm performs identical edits, selections, tab changes, and alternating slot runs. The harness checks the actual Setup and Sketch run content and draw events. Two order-varied sets use fresh contexts, 10 warm-up cycles and 120 measured cycles by default. Post-GC samples are recorded before and after lifecycle disposal every 20 cycles. A final settling and GC step is matched across all arms around the continuous arm's single disposal. Snapshot contexts are separate from the primary samples and are collected at warm and final checkpoints, plus after continuous disposal.
+
+Keep the JSON and snapshots local. Compare within-set slopes and post-disposal endpoints as well as absolute in-use and retained values. A positive whole-renderer slope can include editor history, compiled code, and other objects outside the plugin. The reported measurements concern the V8 renderer.

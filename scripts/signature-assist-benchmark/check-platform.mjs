@@ -56,6 +56,15 @@ const targeted = configuration({
 });
 assert.equal(targeted.pairs, 5);
 assert.equal(targeted.heapCycles, 60);
+assert.equal(
+  configuration({
+    BENCH_REVISION: revision,
+    BENCH_PROFILE: "targeted",
+    BENCH_FIXTURE: "fixture.js",
+    BENCH_STAGE: "heap-attribution",
+  }).heapCycles,
+  120,
+);
 assert.throws(() => configuration({ BENCH_REVISION: revision, BENCH_STAGE: "heap" }), /targeted/);
 assert.equal(
   configuration({

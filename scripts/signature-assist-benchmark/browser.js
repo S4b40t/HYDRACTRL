@@ -19,6 +19,9 @@
   let operation;
   let enabled;
   let matchedRuns = 0;
+  let expectedSlot = 0;
+  let matchedSetup;
+  let unexpectedRun = false;
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
   const hint = () => document.querySelector(".cm-signature-assist");
@@ -259,10 +262,17 @@
         observeTyping();
         requestAnimationFrame(sampleFrame);
       }
-      window.hydractrl.events.on("sketch:run", ({ main }) => {
+      if (options.memoryAttribution) matchedSetup = fixture.setup.replaceAll("\r\n", "\n").trim();
+      window.hydractrl.events.on("sketch:run", ({ main, setup }) => {
         if (!main.includes("benchmarkScene")) return;
-        if (options.memoryAttribution) matchedRuns++;
-        else runs.push({ phase, at: performance.now() });
+        if (options.memoryAttribution) {
+          matchedRuns++;
+          if (
+            main !== `${fixture.sketch}\n// measurement slot ${expectedSlot}` ||
+            setup !== matchedSetup
+          )
+            unexpectedRun = true;
+        } else runs.push({ phase, at: performance.now() });
       });
       tab("setup");
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: fixture.setup } });
@@ -318,6 +328,7 @@
       edit(custom);
       edit(custom);
       view.dispatch({ selection: { anchor: nested + 1 } });
+      expectedSlot = slot;
       document.querySelector(`.slot[data-index="${slot}"]`).click();
       const deadline = performance.now() + 5000;
       while (matchedRuns === previousRuns || draws === previousDraws) {
@@ -325,6 +336,7 @@
         await frame();
       }
       if (
+        unexpectedRun ||
         matchedRuns !== previousRuns + 1 ||
         document.querySelector(".error-notification") ||
         !view.state.doc.toString().endsWith(`// measurement slot ${slot}`)
