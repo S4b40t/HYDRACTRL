@@ -34,6 +34,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { checkSignatureEditor } from "./signature-test-editor.mjs";
 
 const desktopDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -44,6 +45,9 @@ const option = (name) => {
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const testSender = "HYDRACTRL Signature Assist TEST";
+const acceptedHash = "df17224268f1da046489749f7bc58dd37aaf4130a62763b3bfd346388b5944c5";
+const dummySlot = "osc(9, 0.12, 0.4).out()";
 // A 1×1 PNG, for the media checks
 const PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
@@ -106,10 +110,34 @@ async function main() {
     );
     process.exit(1);
   }
-  const userData = mkdtempSync(join(tmpdir(), "hydractrl-smoke-"));
+  const signatureTest = flag("--signature-test");
+  if (
+    signatureTest &&
+    (launch.mode === "dev" ||
+      flag("--no-gpu") ||
+      flag("--software-gl") ||
+      flag("--optional-output"))
+  ) {
+    throw new Error("Use the packaged hardware build with mandatory Spout checks.");
+  }
+  const persistenceOnly = flag("--persistence-only");
+  const sustain = flag("--sustain");
+  const fixture = signatureTest
+    ? await (
+        await import("../../scripts/signature-assist-benchmark/targeted.mjs")
+      ).loadTargetedFixture(process.env.BENCH_FIXTURE)
+    : null;
+  const userData = signatureTest
+    ? join(dirname(launch.executable), "signature-test-data", "smoke")
+    : mkdtempSync(join(tmpdir(), "hydractrl-smoke-"));
   // Files to drop, and a second media folder, outside the app's data folder
-  const mediaFiles = mkdtempSync(join(tmpdir(), "hydractrl-smoke-files-"));
-  const chromiumFlags = ["--no-sandbox", `--user-data-dir=${userData}`, "--inspect=0"];
+  const mediaFiles = signatureTest
+    ? join(userData, "test-input")
+    : mkdtempSync(join(tmpdir(), "hydractrl-smoke-files-"));
+  if (signatureTest) mkdirSync(mediaFiles, { recursive: true });
+  const chromiumFlags = [`--user-data-dir=${userData}`, "--inspect=0"];
+  if (signatureTest) chromiumFlags.push("--signature-assist-test-profile=smoke");
+  else chromiumFlags.push("--no-sandbox");
   const noGpu = flag("--no-gpu");
   if (noGpu) chromiumFlags.push("--disable-gpu");
   else if (flag("--software-gl")) {
@@ -157,11 +185,14 @@ async function main() {
       console.log(`--- app log (tail) ---\n${log}`);
     }
   };
-  const deadline = setTimeout(() => {
-    check("finished within 4 minutes", false);
-    printOutputTail();
-    finish();
-  }, 240000);
+  const deadline = setTimeout(
+    () => {
+      check("finished within 4 minutes", false);
+      printOutputTail();
+      finish();
+    },
+    sustain ? 1200000 : 240000,
+  );
 
   async function finish() {
     clearTimeout(deadline);
@@ -170,8 +201,10 @@ async function main() {
       await Promise.race([exitPromise, sleep(5000)]);
       if (!exited) child.kill("SIGKILL");
     }
-    rmSync(userData, { recursive: true, force: true });
-    rmSync(mediaFiles, { recursive: true, force: true });
+    if (!signatureTest) {
+      rmSync(userData, { recursive: true, force: true });
+      rmSync(mediaFiles, { recursive: true, force: true });
+    }
     const passed = results.length - failures - warnings;
     const warned = warnings > 0 ? `, ${warnings} optional check(s) failed` : "";
     console.log(`\nsmoke: ${passed}/${results.length} checks passed${warned}`);
@@ -214,7 +247,7 @@ async function main() {
 
     /** Run an async snippet in the main process with electron's app, BrowserWindow and Menu in scope. */
     const inMain = async (body) => {
-      const expression = `(async () => { const electron = typeof require === "function" ? require("electron") : process.mainModule.require("electron"); const { app, BrowserWindow, Menu } = electron; ${body} })()`;
+      const expression = `(async () => { const requireElectron = process.getBuiltinModule("module").createRequire(process.execPath); const { app, BrowserWindow, Menu, session } = requireElectron("electron"); ${body} })()`;
       const response = await send("Runtime.evaluate", {
         expression,
         awaitPromise: true,
@@ -325,7 +358,7 @@ async function main() {
     );
     check(
       "app mode reported",
-      state.app.packaged === (launch.mode === "packaged"),
+      state.app.packaged === (signatureTest || launch.mode === "packaged"),
       `packaged=${state.app.packaged}`,
     );
     const expectAvailable = process.platform === "darwin" || process.platform === "win32";
@@ -336,8 +369,171 @@ async function main() {
     );
     check(
       "settings are the defaults",
-      state.settings.output.name === "HYDRACTRL" && state.settings.output.width === 1920,
+      signatureTest
+        ? state.settings.output.name === testSender &&
+            !state.settings.output.autoStart &&
+            state.settings.output.includeAlpha &&
+            (sustain ||
+              persistenceOnly ||
+              (state.settings.output.width === 1280 &&
+                state.settings.output.height === 720 &&
+                state.settings.output.frameRate === 60))
+        : state.settings.output.name === "HYDRACTRL" && state.settings.output.width === 1920,
     );
+    if (signatureTest) {
+      const paths = await inMain(
+        'return [app.getPath("userData"), app.getPath("sessionData"), session.defaultSession.storagePath, app.getPath("crashDumps")];',
+      );
+      check(
+        "profile, Chromium storage and crash dumps are isolated",
+        paths.slice(0, 3).every((value) => value === userData) &&
+          paths[3] === join(userData, "crash-dumps") &&
+          state.app.logPath.startsWith(join(userData, "logs")),
+        JSON.stringify(paths),
+      );
+      check(
+        "owned packaged server on fixed loopback port",
+        state.server.mode === "spawned" &&
+          state.server.pid > 0 &&
+          state.server.url === "http://127.0.0.1:43130" &&
+          !state.settings.server.allowNetwork,
+        JSON.stringify(state.server),
+      );
+      const renderer = await inMainWindow(`(() => {
+        const gl = document.querySelector("#hydra-canvas canvas").getContext("webgl");
+        const ext = gl?.getExtension("WEBGL_debug_renderer_info");
+        return ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : null;
+      })()`);
+      check(
+        "hardware WebGL renderer",
+        Boolean(renderer) && !/swiftshader|software|warp|basic render/i.test(renderer),
+        renderer,
+      );
+      const log = readFileSync(state.app.logPath, "utf8");
+      check(
+        "packaged and served client hash verified",
+        log.includes(`Verified packaged and served client SHA-256 ${acceptedHash}`),
+      );
+    }
+
+    async function quitTest() {
+      const owned = await inMain("return app.getAppMetrics().map(({pid})=>pid);");
+      await inMain("setTimeout(() => app.quit(), 800); return true;");
+      ws.close();
+      const code = await Promise.race([exitPromise, sleep(20000).then(() => "timeout")]);
+      check("app quits cleanly", code === 0, `exit ${code}`);
+      const reachable = await fetch(`${state.server.url}/api/capabilities`).then(
+        () => true,
+        () => false,
+      );
+      check("owned server port released", !reachable, state.server.url);
+      await sleep(500);
+      const live = [...new Set([...owned, state.server.pid])].filter((pid) => {
+        if (!pid) return false;
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      check("owned renderer, GPU and server processes stopped", live.length === 0, live.join(","));
+    }
+
+    if (signatureTest && persistenceOnly) {
+      const slot = await inMainWindow('localStorage.getItem("hydractrl-slot-bank-0-slot-0")');
+      const media = await fetchMedia("/media/smoke%20pixel.png");
+      check("dummy scene bank persisted through restart", slot === dummySlot);
+      check(
+        "isolated media persisted through restart",
+        media.status === 200 && media.bytes.equals(PIXEL_PNG),
+      );
+      check(
+        "test settings persisted through restart",
+        (await getState()).settings.output.width === 16,
+      );
+      await quitTest();
+      return finish();
+    }
+
+    if (signatureTest && sustain) {
+      await inMainWindow(`window.hydractrlDesktop.updateSettings({
+        output:{ width:1280,height:720,frameRate:60,includeAlpha:true,preview:false },
+      })`);
+      await inMainWindow(`(() => {
+        document.querySelector('.editor-tab[data-tab="setup"]').click();
+        const editor=window._editorProxy;
+        editor.dispatch({changes:{from:0,to:editor.state.doc.length,insert:${JSON.stringify(fixture.setup)}}});
+        document.querySelector('.editor-tab[data-tab="main"]').click();
+        window.__desktopSustainErrors=[];
+        window.addEventListener("error", (event)=>window.__desktopSustainErrors.push(event.message));
+        window.addEventListener("unhandledrejection", ()=>window.__desktopSustainErrors.push("unhandled rejection"));
+      })()`);
+      await runInEditor(fixture.sketch);
+      check(
+        "Spout starts for sustained smoke",
+        await inMainWindow("window.hydractrlDesktop.startOutput()"),
+      );
+      const began = Date.now();
+      const samples = [];
+      const outputFile = process.env.SUSTAIN_RESULT;
+      if (!outputFile) throw new Error("Set SUSTAIN_RESULT to a new local JSON path.");
+      writeFileSync(outputFile, "[]", { flag: "wx" });
+      const sketches = [fixture.sketch, fixture.sketch.replace("osc(12,", "osc(9,")];
+      while (Date.now() - began < 15 * 60 * 1000) {
+        const sketch = sketches[samples.length % sketches.length];
+        const dispatchMs = await inMainWindow(`(() => {
+          const code=${JSON.stringify(sketch)};
+          const view=document.querySelector(".cm-content").cmView.rootView.view;
+          view.focus();
+          const start = performance.now();
+          view.dispatch({changes:{from:0,to:view.state.doc.length,insert:code},
+            selection:{anchor:code.indexOf("clamp(0.5,")+"clamp(0.5,".length}});
+          return performance.now() - start;
+        })()`);
+        await sleep(300);
+        const tooltip = await inMainWindow(
+          'document.querySelector(".cm-signature-assist strong")?.textContent ?? null',
+        );
+        await inMainWindow('document.getElementById("run-btn").click()');
+        await sleep(14700);
+        const current = await getState();
+        const metrics = await inMain("return app.getAppMetrics();");
+        const heap = await inMainWindow("performance.memory?.usedJSHeapSize ?? null");
+        const errors = await inMainWindow("window.__desktopSustainErrors");
+        samples.push({
+          elapsedMs: Date.now() - began,
+          output: current.output,
+          metrics,
+          heap,
+          dispatchMs,
+          tooltip: tooltip === fixture.customHint.active,
+          scene: (await outputSketch()) === sketch,
+          runtimeErrors: errors.length,
+        });
+        writeFileSync(outputFile, JSON.stringify(samples));
+        if (samples.length % 10 === 0)
+          console.log(`sustain: ${samples.length} samples, Spout ${current.output.fps} fps`);
+      }
+      check(
+        "sustained renderer stayed running",
+        samples.every((x) => x.output.state === "running" && x.output.fps > 0),
+      );
+      check(
+        "scene changes arrived at the output",
+        samples.every((x) => x.scene),
+      );
+      check(
+        "sustained editor retained Signature Assist",
+        samples.every((x) => x.tooltip),
+      );
+      check(
+        "no sustained editor runtime errors",
+        samples.every((x) => x.runtimeErrors === 0),
+      );
+      await quitTest();
+      return finish();
+    }
 
     if (noGpu) {
       console.log("SKIP interface plugins and the OUTPUT block (they need WebGL)");
@@ -395,6 +591,31 @@ async function main() {
         JSON.stringify({ state: running.state, fps: running.fps, error: running.error }),
         { optional },
       );
+      if (signatureTest && framesFlow) {
+        check(
+          "Spout uses test sender, 720p60 and alpha",
+          running.protocol === "Spout" &&
+            running.name === testSender &&
+            running.width === 1280 &&
+            running.height === 720 &&
+            running.frameRate === 60 &&
+            running.includeAlpha,
+          JSON.stringify(running),
+        );
+        await inMainWindow("window.hydractrlDesktop.updateSettings({output:{preview:true}})");
+        await sleep(500);
+        check("Spout preview opens", (await getState()).output.previewOpen);
+        const outputProfiles = await inMain(
+          "return BrowserWindow.getAllWindows().map(w=>w.webContents.session.storagePath);",
+        );
+        check(
+          "all Electron windows use isolated or in-memory session storage",
+          outputProfiles.every((value) => value === null || value === userData),
+        );
+        check("Spout restarts", await inMainWindow("window.hydractrlDesktop.restartOutput()"));
+        await sleep(800);
+        check("restarted Spout resumes frames", (await getState()).output.fps > 0);
+      }
 
       // The interface shows the output's own frames instead of rendering
       // again, and runs sketches there
@@ -545,6 +766,29 @@ async function main() {
     }
     check("Use Default goes back to the app's media folder", restored?.status === 200);
 
+    if (signatureTest && !noGpu) {
+      await checkSignatureEditor({
+        check,
+        inMain,
+        inMainWindow,
+        mainWindow: MAIN_WINDOW,
+        fixture,
+        sleep,
+      });
+      const audio = await inMainWindow(
+        'window.hydractrl.plugins.getApi("audio-input")?.choose(null)',
+      );
+      check("isolated editor accepts system-default audio selection", audio?.choice === null);
+      await inMainWindow(`(() => {
+        localStorage.setItem("hydractrl-slot-bank-0-slot-0",${JSON.stringify(dummySlot)});
+        document.querySelector('.slot[data-index="0"]').click();
+      })()`);
+      check(
+        "Signature Assist remains active after loading a dummy slot",
+        (await inMainWindow('window.hydractrl.plugins.getStatus("signature-assist")')) === "active",
+      );
+    }
+
     // Settings window
     await inMainWindow('window.hydractrlDesktop.openSettings("resolution")');
     let serverText = "";
@@ -562,8 +806,8 @@ async function main() {
     await inSettings('document.querySelector("label:has(#allowNetwork) .track").click(); true');
     await sleep(400);
     check(
-      "switch toggles a server setting",
-      await inSettings('document.getElementById("allowNetwork").checked'),
+      signatureTest ? "test profile refuses LAN access" : "switch toggles a server setting",
+      (await inSettings('document.getElementById("allowNetwork").checked')) === !signatureTest,
     );
     await inSettings(
       'window.hydractrlDesktop.updateSettings({ output: { name: "SmokeTest", width: 3840, height: 2160, frameRate: 30 } }).then(() => true)',
@@ -574,9 +818,9 @@ async function main() {
     const saved = existsSync(settingsFile) ? JSON.parse(readFileSync(settingsFile, "utf8")) : null;
     check(
       "settings persisted to disk",
-      saved?.output?.name === "SmokeTest" &&
+      saved?.output?.name === (signatureTest ? testSender : "SmokeTest") &&
         saved?.output?.width === 3840 &&
-        saved?.server?.allowNetwork === true,
+        saved?.server?.allowNetwork === !signatureTest,
       settingsFile,
     );
     const rendered = await inSettings(
@@ -584,7 +828,12 @@ async function main() {
     );
     check(
       "settings window re-rendered from state",
-      rendered === '{"name":"SmokeTest","preset":"3840x2160","rate":"30"}',
+      rendered ===
+        JSON.stringify({
+          name: signatureTest ? testSender : "SmokeTest",
+          preset: "3840x2160",
+          rate: "30",
+        }),
       rendered,
     );
     const checked = await inMain(
@@ -600,7 +849,8 @@ async function main() {
     );
     check(
       "invalid settings are clamped",
-      clamped.output.width === 16 && clamped.output.name === "SmokeTest",
+      clamped.output.width === 16 &&
+        clamped.output.name === (signatureTest ? testSender : "SmokeTest"),
       JSON.stringify(clamped.output),
     );
     const mediaRow = await inSettings(
