@@ -19,6 +19,7 @@ const bun = process.env.BUN || "bun";
 const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
 const timing = { warmMs: config.warmMs, idleMs: config.idleMs, editMs: config.editMs };
 const diagnosticTiming = { warmMs: timing.warmMs, idleMs: 1300, editMs: 1400 };
+const attribution = config.stage === "heap-attribution";
 
 function fixture(size, setupExtra, sketchExtra) {
   const helpers = (prefix, count) =>
@@ -368,6 +369,100 @@ async function memoryTrial(pair, control, snapshotDirectory) {
   }
 }
 
+async function attributionTrial(set, arm, snapshots) {
+  checkInterrupted();
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 720 },
+    deviceScaleFactor: 1,
+  });
+  try {
+    const { page, errors } = await freshPage(context, true);
+    const continuous = arm === "continuous";
+    const environment = await page.evaluate((options) => window.signatureBenchmark.init(options), {
+      fixture: heapFixture,
+      enabled: continuous,
+      autoRun: false,
+      timing: diagnosticTiming,
+      memoryAttribution: true,
+    });
+    verifyGraphics(environment, { fixture: heapFixture.size, heap: true, set, arm, snapshots });
+    console.log(`Heap ${snapshots ? "snapshots" : "samples"} set ${set}: ${arm}`);
+    const cdp = await context.newCDPSession(page);
+    async function checkpoint(label, capture = false) {
+      await cdp.send("HeapProfiler.collectGarbage");
+      const usage = await cdp.send("Runtime.getHeapUsage");
+      if (snapshots && capture) {
+        const output = path.join(
+          config.snapshotDirectory,
+          `set-${set}-${arm}-${label}.heapsnapshot`,
+        );
+        const fd = openSync(output, "wx");
+        const append = ({ chunk }) => writeSync(fd, chunk);
+        cdp.on("HeapProfiler.addHeapSnapshotChunk", append);
+        try {
+          await cdp.send("HeapProfiler.takeHeapSnapshot", { reportProgress: false });
+        } finally {
+          cdp.off("HeapProfiler.addHeapSnapshotChunk", append);
+          closeSync(fd);
+        }
+      }
+      return usage;
+    }
+    const active = (state, expected) => {
+      assert.equal(state.mode, expected ? "active" : null);
+      assert.deepEqual(state.extension, { field: expected, focus: expected, keys: expected });
+    };
+    const settle = async (dispose, expected) => {
+      const state = await page.evaluate(
+        (dispose) => window.signatureBenchmark.matchedSettle(dispose),
+        dispose,
+      );
+      active(state, expected);
+      assert.equal(state.tooltip, expected);
+      assert.equal(state.autoRun, true);
+      if (!config.headless) assert.equal(state.visible, true);
+      return state;
+    };
+    let runs = 0;
+    let draws = 0;
+    const warmCycles = config.pilot ? 2 : 10;
+    const samples = [];
+    const totalCycles = warmCycles + config.heapCycles;
+    for (let index = 1; index <= totalCycles; index++) {
+      checkInterrupted();
+      const cycle = index - warmCycles;
+      const state = await page.evaluate((args) => window.signatureBenchmark.matchedEdit(args), {
+        arm,
+        slot: index % 2,
+        expectedHint: arm === "absent" ? null : heapFixture.customHint,
+      });
+      active(state, arm !== "absent");
+      assert.equal(state.runs, 1);
+      assert.ok(state.draws > 0);
+      runs += state.runs;
+      draws += state.draws;
+      const measure = cycle >= 0 && (cycle % 20 === 0 || index === totalCycles);
+      const inUse = measure ? await checkpoint() : null;
+      await settle(arm === "lifecycle", continuous);
+      if (measure) {
+        const label = cycle === 0 ? "warm" : index === totalCycles ? "final" : String(cycle);
+        samples.push({
+          cycle,
+          inUse,
+          settled: await checkpoint(label, cycle === 0 || index === totalCycles),
+        });
+      }
+    }
+    // Match the final settling/GC in all arms; only the continuous arm unregisters here.
+    const finalState = await settle(continuous, false);
+    const afterDisposal = await checkpoint("disposed", continuous);
+    assert.deepEqual(errors, []);
+    return { set, arm, warmCycles, runs, draws, samples, finalState, afterDisposal };
+  } finally {
+    await context.close();
+  }
+}
+
 try {
   if (config.revision)
     assert.equal(
@@ -413,7 +508,7 @@ try {
     await cdp.detach();
   }
 
-  if (config.stage !== "heap") {
+  if (config.stage === "all") {
     for (const fixture of fixtures) {
       for (const autoRun of fixture.size === "stress" ? [false] : [false, true]) {
         for (let pair = 0; pair < config.pairs; pair++) {
@@ -426,13 +521,21 @@ try {
       }
     }
   }
-  execFileSync(bun, ["scripts/signature-assist-benchmark/build-probe.mjs", probe], {
-    cwd: root,
-    windowsHide: true,
-  });
+  execFileSync(
+    bun,
+    [
+      "scripts/signature-assist-benchmark/build-probe.mjs",
+      probe,
+      ...(attribution ? ["--lifecycle-only"] : []),
+    ],
+    {
+      cwd: root,
+      windowsHide: true,
+    },
+  );
   probeHash = sha256(await readFile(probe));
   raw.provenance.diagnosticBundleSha256 = probeHash;
-  if (config.stage !== "heap") {
+  if (config.stage === "all") {
     for (const fixture of fixtures) {
       for (const autoRun of config.targeted && fixture.size === "real-setup"
         ? [false, true]
@@ -441,13 +544,33 @@ try {
       }
     }
   }
-  for (let pair = 0; pair < config.heapPairs; pair++) {
-    for (const control of pair % 2 ? [false, true] : [true, false]) {
-      raw.heapTrials.push(await memoryTrial(pair + 1, control));
-      await writeFile(config.output, JSON.stringify(raw));
+  if (attribution) {
+    raw.attributionTrials = [];
+    const arms = ["absent", "continuous", "lifecycle"];
+    for (let set = 0; set < config.heapPairs; set++) {
+      for (let position = 0; position < arms.length; position++) {
+        const arm = arms[(position + set) % arms.length];
+        raw.attributionTrials.push(await attributionTrial(set + 1, arm, false));
+        await writeFile(config.output, JSON.stringify(raw));
+      }
+    }
+    if (config.snapshotDirectory) {
+      await mkdir(config.snapshotDirectory, { recursive: true });
+      raw.attributionSnapshots = [];
+      for (const arm of ["lifecycle", "absent", "continuous"]) {
+        raw.attributionSnapshots.push(await attributionTrial(1, arm, true));
+        await writeFile(config.output, JSON.stringify(raw));
+      }
+    }
+  } else {
+    for (let pair = 0; pair < config.heapPairs; pair++) {
+      for (const control of pair % 2 ? [false, true] : [true, false]) {
+        raw.heapTrials.push(await memoryTrial(pair + 1, control));
+        await writeFile(config.output, JSON.stringify(raw));
+      }
     }
   }
-  if (config.snapshotDirectory) {
+  if (!attribution && config.snapshotDirectory) {
     await mkdir(config.snapshotDirectory, { recursive: true });
     raw.snapshotTrials = [];
     for (const control of [true, false]) {

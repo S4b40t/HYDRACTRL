@@ -18,6 +18,7 @@
   let typing;
   let operation;
   let enabled;
+  let matchedRuns = 0;
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
   const hint = () => document.querySelector(".cm-signature-assist");
@@ -239,25 +240,29 @@
       }
       // Benchmark-only access to the CodeMirror dispatch entry point.
       view = document.querySelector(".cm-content").cmView.rootView.view;
-      const dispatch = view.dispatch;
-      view.dispatch = (...args) => {
-        const started = performance.now();
-        dispatch(...args);
-        if (phase) {
-          const duration = performance.now() - started;
-          const data = phases[phase];
-          data.dispatchMs.push(duration);
-          if (operation) {
-            data.operations ??= {};
-            data.operations[operation] ??= [];
-            data.operations[operation].push(duration);
+      if (!options.memoryAttribution) {
+        const dispatch = view.dispatch;
+        view.dispatch = (...args) => {
+          const started = performance.now();
+          dispatch(...args);
+          if (phase) {
+            const duration = performance.now() - started;
+            const data = phases[phase];
+            data.dispatchMs.push(duration);
+            if (operation) {
+              data.operations ??= {};
+              data.operations[operation] ??= [];
+              data.operations[operation].push(duration);
+            }
           }
-        }
-      };
-      observeTyping();
-      requestAnimationFrame(sampleFrame);
+        };
+        observeTyping();
+        requestAnimationFrame(sampleFrame);
+      }
       window.hydractrl.events.on("sketch:run", ({ main }) => {
-        if (main.includes("benchmarkScene")) runs.push({ phase, at: performance.now() });
+        if (!main.includes("benchmarkScene")) return;
+        if (options.memoryAttribution) matchedRuns++;
+        else runs.push({ phase, at: performance.now() });
       });
       tab("setup");
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: fixture.setup } });
@@ -275,7 +280,12 @@
         throw new Error("Auto-run mode did not take effect");
       await wait(timing.warmMs);
       const canvas = document.querySelector("#hydra-canvas canvas");
-      if (!runs.length || !draws || canvas.width !== 1280 || canvas.height !== 720) {
+      if (
+        !(runs.length || matchedRuns) ||
+        !draws ||
+        canvas.width !== 1280 ||
+        canvas.height !== 720
+      ) {
         throw new Error(
           `Workload did not start: runs=${runs.length} draws=${draws} canvas=${canvas.width}x${canvas.height}`,
         );
@@ -289,6 +299,64 @@
         height: canvas.height,
         mode: host.getStatus(pluginId),
         autoRun: options.autoRun,
+      };
+    },
+    async matchedEdit({ arm, slot, expectedHint }) {
+      const host = window.hydractrl.plugins;
+      if (arm === "lifecycle" && !probe.install()) throw new Error("Registration failed");
+      const previousRuns = matchedRuns;
+      const previousDraws = draws;
+      tab("setup");
+      const end = view.state.doc.length;
+      view.dispatch({ changes: { from: end, insert: " " } });
+      view.dispatch({ changes: { from: end, to: end + 1 } });
+      view.dispatch({ selection: { anchor: fixture.setupCursor } });
+      tab("main");
+      view.focus();
+      const [native, custom, nested] = positions();
+      view.dispatch({ selection: { anchor: native + 1 } });
+      edit(custom);
+      edit(custom);
+      view.dispatch({ selection: { anchor: nested + 1 } });
+      document.querySelector(`.slot[data-index="${slot}"]`).click();
+      const deadline = performance.now() + 5000;
+      while (matchedRuns === previousRuns || draws === previousDraws) {
+        if (performance.now() > deadline) throw new Error("Slot did not run and draw");
+        await frame();
+      }
+      if (
+        matchedRuns !== previousRuns + 1 ||
+        document.querySelector(".error-notification") ||
+        !view.state.doc.toString().endsWith(`// measurement slot ${slot}`)
+      ) {
+        throw new Error("Mismatched slot or sketch run");
+      }
+      view.focus();
+      view.dispatch({ selection: { anchor: positions()[1] + 1 } });
+      await frame();
+      const wanted = JSON.stringify(expectedHint);
+      while (JSON.stringify(window.signatureBenchmark.readHint()) !== wanted) {
+        if (performance.now() > deadline) throw new Error("Signature did not match the arm");
+        await frame();
+      }
+      return {
+        runs: matchedRuns - previousRuns,
+        draws: draws - previousDraws,
+        mode: host.getStatus(pluginId),
+        extension: extensionStatus(),
+      };
+    },
+    async matchedSettle(dispose) {
+      const host = window.hydractrl.plugins;
+      if (dispose && !host.unregister(pluginId)) throw new Error("Disposal failed");
+      await frame();
+      await frame();
+      return {
+        mode: host.getStatus(pluginId),
+        tooltip: Boolean(hint()),
+        extension: extensionStatus(),
+        autoRun: host.getStatus("auto-run") === "active" && !host.getApi("auto-run").isEnabled(),
+        visible: document.visibilityState === "visible",
       };
     },
     readHint() {

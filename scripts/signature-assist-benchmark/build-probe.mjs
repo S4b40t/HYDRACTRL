@@ -1,6 +1,8 @@
 // Assemble a temporary diagnostic bundle. The normal build is left untouched.
 import { readFile, writeFile } from "node:fs/promises";
 
+const lifecycleOnly = process.argv.includes("--lifecycle-only");
+
 function replace(contents, marker, replacement) {
   if (!contents.includes(marker)) throw new Error(`Missing diagnostic anchor: ${marker}`);
   return contents.replace(marker, replacement);
@@ -37,6 +39,7 @@ const result = await Bun.build({
           async ({ path }) => {
             let contents = (await readFile(path, "utf8")).replaceAll("\r\n", "\n");
             if (path.split(/[\\/]/).at(-1) === "customSignatures.js") {
+              if (lifecycleOnly) return { contents, loader: "js" };
               for (const [kind, expression] of [
                 ["active", "indexCustomSignatures(source, tree)"],
                 ["inactive", "indexCustomSignatures(source, parser.parse(source))"],
@@ -51,7 +54,7 @@ const result = await Bun.build({
                   `...measureProbe("${kind}", () => ${expression}, source.length)`,
                 );
               }
-              for (const [marker, replacement] of [
+              const replacements = [
                 [
                   "parser.parse(source)",
                   'measureProbe("inactive-parse", () => parser.parse(source), source.length)',
@@ -101,10 +104,11 @@ const result = await Bun.build({
                   "  return { bindings, nested };",
                   '  recordProbe("bindings-walk", walkStarted, source.length);\n  return { bindings, nested };',
                 ],
-              ])
+              ];
+              for (const [marker, replacement] of replacements)
                 contents = replace(contents, marker, replacement);
             } else {
-              for (const [marker, replacement] of [
+              const replacements = [
                 [
                   "const call = hydraCallAtCursor",
                   'const call = measureProbe("call-context", () => hydraCallAtCursor',
@@ -148,12 +152,13 @@ const result = await Bun.build({
 
 export function createSignatureAssistPlugin()`,
                 ],
-              ])
+              ];
+              for (const [marker, replacement] of replacements.slice(lifecycleOnly ? 6 : 0))
                 contents = replace(contents, marker, replacement);
               contents +=
                 "\nglobalThis.__signatureProbe.install = () => window.hydractrl.registerPlugin(createSignatureAssistPlugin());";
             }
-            contents += timingHelpers;
+            if (!lifecycleOnly) contents += timingHelpers;
             return { contents, loader: "js" };
           },
         );

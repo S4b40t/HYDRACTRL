@@ -21,8 +21,8 @@ export function configuration(env) {
   const pilot = profile.endsWith("pilot");
   const targeted = profile.startsWith("targeted");
   const stage = env.BENCH_STAGE ?? "all";
-  if (stage !== "all" && (stage !== "heap" || !targeted))
-    throw new Error("BENCH_STAGE=heap requires a targeted profile");
+  if (stage !== "all" && (!targeted || !["heap", "heap-attribution"].includes(stage)))
+    throw new Error("BENCH_STAGE=heap or heap-attribution requires a targeted profile");
   if (targeted && !env.BENCH_FIXTURE)
     throw new Error("Set BENCH_FIXTURE to the path of the reviewed Setup file");
   const revision = env.BENCH_REVISION?.toLowerCase();
@@ -51,8 +51,8 @@ export function configuration(env) {
     heapCycles: number(
       env,
       "BENCH_HEAP_CYCLES",
-      pilot ? 2 : targeted ? 60 : 30,
-      pilot ? 2 : targeted ? 60 : 20,
+      pilot ? 2 : stage === "heap-attribution" ? 120 : targeted ? 60 : 30,
+      pilot ? 2 : stage === "heap-attribution" ? 120 : targeted ? 60 : 20,
       200,
     ),
     heapPairs: number(env, "BENCH_HEAP_PAIRS", pilot ? 1 : 2, pilot ? 1 : 2, 10),
