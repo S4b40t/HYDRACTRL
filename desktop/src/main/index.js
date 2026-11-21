@@ -34,7 +34,7 @@ import {
   resolvePaths,
   serverCommand,
 } from "./config.js";
-import { TEST_SENDER, startDesktopTest, testSettings, verifyTestBundle } from "./desktop-test.js";
+import { startDesktopTest, testSettings, verifyTestBundle } from "./desktop-test.js";
 import { IPC, registerIpc } from "./ipc.js";
 import { createLogger, describeError } from "./log.js";
 import { MAX_IMPORT_FILES, createMediaLibrary } from "./media.js";
@@ -51,6 +51,7 @@ import {
 import { createWindowStateStore } from "./windowState.js";
 import { createWindowManager } from "./windows.js";
 
+const PORTABLE_NAME = "HYDRACTRL Portable";
 app.setName(APP_NAME);
 let desktopTest;
 let startupAllowed = true;
@@ -58,10 +59,10 @@ try {
   desktopTest = startDesktopTest(app);
 } catch (error) {
   startupAllowed = false;
-  dialog.showErrorBox("HYDRACTRL Signature Assist TEST", error.message);
+  dialog.showErrorBox(PORTABLE_NAME, error.message);
   app.exit(2);
 }
-if (desktopTest) app.setName(TEST_SENDER);
+if (desktopTest) app.setName(PORTABLE_NAME);
 if (process.platform === "win32" && !desktopTest && startupAllowed) app.setAppUserModelId(APP_ID);
 
 // One running copy: a second launch focuses the existing window instead
@@ -153,7 +154,7 @@ function main() {
   function getAppState() {
     return {
       app: {
-        name: desktopTest ? TEST_SENDER : APP_NAME,
+        name: app.getName(),
         ...(desktopTest ? { testRevision: desktopTest.revision } : {}),
         version: app.getVersion(),
         platform: process.platform,
@@ -457,7 +458,7 @@ function main() {
       windows = createWindowManager({
         BrowserWindow,
         screen,
-        appName: desktopTest ? `${TEST_SENDER} — ${desktopTest.revision.slice(0, 7)}` : APP_NAME,
+        appName: desktopTest ? `${PORTABLE_NAME} — ${desktopTest.revision.slice(0, 7)}` : APP_NAME,
         preloadPath: PRELOAD_PATH,
         rendererDir: RENDERER_DIR,
         iconPath: ICON_PATH,

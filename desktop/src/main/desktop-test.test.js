@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { TEST_SENDER, startDesktopTest, testSettings, verifyTestBundle } from "./desktop-test.js";
 import { DEFAULT_SETTINGS } from "./settings.js";
 
-test("a marked package requires its own profile before the app can take the lock", () => {
+test("a marked package selects its own profile before the app can take the lock", () => {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), "signature-profile-test-")));
   try {
     writeFileSync(join(directory, "package.json"), '{"signatureAssistTest":"reviewed"}');
@@ -15,26 +15,41 @@ test("a marked package requires its own profile before the app can take the lock
     const app = {
       isPackaged: true,
       getAppPath: () => directory,
-      commandLine: { getSwitchValue: (name) => switches[name] },
+      commandLine: {
+        getSwitchValue: (name) => switches[name],
+        appendSwitch: (name, value) => {
+          switches[name] = value;
+        },
+      },
       setPath: (key, value) => {
         values[key] = value;
       },
     };
     const executable = join(directory, "HYDRACTRL.exe");
-    expect(() => startDesktopTest(app, executable)).toThrow("Launch Signature Assist TEST.cmd");
-    switches["signature-assist-test-profile"] = "main";
     switches["user-data-dir"] = directory;
     expect(() => startDesktopTest(app, executable)).toThrow("dedicated user-data");
     expect(values).toEqual({});
 
     const profilePath = join(directory, "signature-test-data", "main");
-    switches["user-data-dir"] = profilePath;
+    delete switches["user-data-dir"];
     const config = startDesktopTest(app, executable);
     expect(config).toEqual({ profilePath, port: 43129, revision: "reviewed" });
     expect(values).toEqual({
       userData: profilePath,
       sessionData: profilePath,
       crashDumps: join(profilePath, "crash-dumps"),
+    });
+    expect(switches["user-data-dir"]).toBe(profilePath);
+
+    switches["signature-assist-test-profile"] = "unknown";
+    expect(() => startDesktopTest(app, executable)).toThrow("Unknown HYDRACTRL Portable profile.");
+    switches["signature-assist-test-profile"] = "biotech";
+    expect(() => startDesktopTest(app, executable)).toThrow("dedicated user-data");
+    delete switches["user-data-dir"];
+    expect(startDesktopTest(app, executable)).toEqual({
+      profilePath: join(directory, "signature-test-data", "biotech"),
+      port: 43131,
+      revision: "reviewed",
     });
     const localMedia = join(profilePath, "images");
     mkdirSync(localMedia);

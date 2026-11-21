@@ -19,18 +19,19 @@ function makeLocalDir(path) {
 export function startDesktopTest(app, executable = process.execPath) {
   if (!app.isPackaged) return null;
   const metadata = JSON.parse(readFileSync(join(app.getAppPath(), "package.json"), "utf8"));
-  const profile = app.commandLine.getSwitchValue("signature-assist-test-profile");
+  const requestedProfile = app.commandLine.getSwitchValue("signature-assist-test-profile");
   if (!metadata.signatureAssistTest) {
-    if (profile) throw new Error("Use the dedicated Signature Assist test package.");
+    if (requestedProfile) throw new Error("Use the dedicated HYDRACTRL Portable package.");
     return null;
   }
+  const profile = requestedProfile || "main";
   const port = ports.get(profile);
-  if (!port) throw new Error("Start this test package with Launch Signature Assist TEST.cmd.");
+  if (!port) throw new Error("Unknown HYDRACTRL Portable profile.");
   const root = join(realpathSync(dirname(executable)), "signature-test-data");
   const expected = join(root, profile);
   const supplied = app.commandLine.getSwitchValue("user-data-dir");
-  if (!supplied || resolve(supplied).toLowerCase() !== expected.toLowerCase()) {
-    throw new Error("The launcher must supply this package's dedicated user-data directory.");
+  if (supplied && resolve(supplied).toLowerCase() !== expected.toLowerCase()) {
+    throw new Error("Use this package's dedicated user-data directory.");
   }
   const profilePath = makeLocalDir(join(makeLocalDir(root), profile));
   if (profilePath.toLowerCase() !== expected.toLowerCase()) {
@@ -39,6 +40,7 @@ export function startDesktopTest(app, executable = process.execPath) {
   app.setPath("userData", profilePath);
   app.setPath("sessionData", profilePath);
   app.setPath("crashDumps", makeLocalDir(join(profilePath, "crash-dumps")));
+  if (!supplied) app.commandLine.appendSwitch("user-data-dir", profilePath);
   return { profilePath, port, revision: metadata.signatureAssistTest };
 }
 
