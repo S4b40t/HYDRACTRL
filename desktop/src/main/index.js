@@ -557,7 +557,7 @@ function main() {
                     "index.js",
                   );
                   const expected =
-                    "8ff8348adad0ce891d7cdd546051d958e87ca3b2af67085b3d2cb0292ed93463";
+                    "4c94c3b4a7aca2f6049170ddfa5ae41a310bd8adc9a6b138e413952ed5389d48";
                   verifyTestBundle(expected, fs.readFileSync(asset));
                   const response = await fetch(`${url}/assets/index.js`, {
                     redirect: "error",
