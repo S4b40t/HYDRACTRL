@@ -279,6 +279,14 @@ export function createSlotsPanel(editor, hydra, runCode, mobilePosition = false,
   titleContainer.appendChild(title);
   titleContainer.appendChild(dotsContainer);
 
+  const pendingIndicator = document.createElement("span");
+  pendingIndicator.hidden = true;
+  pendingIndicator.className = "pending-slot-indicator";
+  pendingIndicator.style.color = "var(--color-syntax-string)";
+  pendingIndicator.style.fontSize = "11px";
+  pendingIndicator.setAttribute("role", "status");
+  titleContainer.appendChild(pendingIndicator);
+
   // Create the clear button
   const clearBtn = document.createElement("div");
   clearBtn.className = "slots-clear";
@@ -322,6 +330,7 @@ export function createSlotsPanel(editor, hydra, runCode, mobilePosition = false,
   // Track current bank (0-3) and active slot
   let currentBank = 0; // Default to first bank
   let activeSlotIndex = 0; // Default to first slot
+  let pending = null;
 
   const getStorageKey = slotStorageKey;
 
@@ -375,6 +384,48 @@ export function createSlotsPanel(editor, hydra, runCode, mobilePosition = false,
     slot.appendChild(index);
     slotsGrid.appendChild(slot);
     slotElements.push(slot);
+  }
+
+  function showPending(target) {
+    if (pending?.bank === target?.bank && pending?.slot === target?.slot) return;
+    if (pending) {
+      slotElements[pending.slot].style.outline = "";
+      bankDots[pending.bank].style.outline = "";
+    }
+    pending = target;
+    pendingIndicator.hidden = !pending;
+    pendingIndicator.textContent = pending
+      ? `Pending ${pending.bank + 1} / ${pending.slot + 1}`
+      : "";
+    if (pending) {
+      const marker =
+        pending.bank === currentBank ? slotElements[pending.slot] : bankDots[pending.bank];
+      marker.style.outline = "2px dashed var(--color-syntax-string)";
+      marker.style.outlineOffset = "-2px";
+    }
+  }
+
+  function setPendingSlot(slot) {
+    showPending({ bank: pending?.bank ?? currentBank, slot });
+  }
+
+  function setPendingBank(bank) {
+    showPending({ bank, slot: pending?.slot ?? activeSlotIndex });
+  }
+
+  function cyclePendingBank(direction) {
+    setPendingBank(((pending?.bank ?? currentBank) + direction + 4) % 4);
+  }
+
+  function confirmPendingSlot() {
+    if (!pending) return;
+    const { bank, slot } = pending;
+    if (!localStorage.getItem(getStorageKey(bank, slot))) {
+      notifyError(`Bank ${bank + 1}, slot ${slot + 1} is empty`);
+      return;
+    }
+    if (bank === currentBank) setActiveSlot(slot);
+    else switchBank(bank, slot);
   }
 
   // Function to cycle to next/previous bank
@@ -446,6 +497,7 @@ export function createSlotsPanel(editor, hydra, runCode, mobilePosition = false,
   // Function to switch bank, landing on `slot` (the first one unless told)
   function switchBank(bankIndex, slot = 0) {
     if (bankIndex === currentBank) return;
+    showPending(null);
 
     // Save current bank index
     currentBank = bankIndex;
@@ -465,6 +517,7 @@ export function createSlotsPanel(editor, hydra, runCode, mobilePosition = false,
 
   // Function to update active slot styling
   async function setActiveSlot(index, loadContent = true) {
+    showPending(null);
     // Remove active styling from previous active slot but preserve content indication
     const prevStorageKey = getStorageKey(currentBank, activeSlotIndex);
     const prevHasCode = localStorage.getItem(prevStorageKey);
@@ -1342,6 +1395,11 @@ export function createSlotsPanel(editor, hydra, runCode, mobilePosition = false,
     getActiveSlotIndex: () => activeSlotIndex,
     getBank: () => currentBank,
     getState,
+    setPendingSlot,
+    setPendingBank,
+    cyclePendingBank,
+    confirmPendingSlot,
+    clearPending: () => showPending(null),
     setActiveSlot,
     clearAllSlots,
     switchBank,

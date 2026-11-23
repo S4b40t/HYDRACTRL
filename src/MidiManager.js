@@ -2,14 +2,25 @@
  * MIDI Manager
  * A simple manager for MIDI input devices with special support for Korg nanoPAD2
  */
-// Module-level variables for MIDI state
-let isNanoPad = false;
-let midiAccess = null;
-let activeDevice = null;
-let isConnected = false;
-let xyPadPanel = null;
-const xyPadValues = { x: 0, y: 0 };
+import { createSafeStorage } from "./client/core/Storage.js";
+import {
+  NAVIGATION_ACTIONS,
+  controlKey,
+  createNavigationControls,
+  isContinuousAction,
+  normalizeControl,
+  normalizeNavigationProfile,
+  readMidiControl,
+} from "./client/core/midiControls.js";
 
+const PREFERENCE_KEY = "hydractrl-midi-preferences";
+const PROFILE_PREFIX = "hydractrl-midi-profile:";
+
+function profileKey(device) {
+  return PROFILE_PREFIX + device.id;
+}
+
+// MIDI device state
 /**
  * The scene a pad's note belongs to: the current scene when its mapping has
  * the note, else the first scene whose mapping does, or -1 when none does.
@@ -26,7 +37,52 @@ export function sceneForNote(mapping, currentScene, note) {
   return -1;
 }
 
-export function createMidiManager(slotsPanel) {
+export function createMidiManager(slotsPanel, { storage = createSafeStorage() } = {}) {
+  let isNanoPad = false;
+  let midiAccess = null;
+  let activeDevice = null;
+  let isConnected = false;
+  let xyPadPanel = null;
+  const xyPadValues = { x: 0, y: 0 };
+  let preferredId = storage.get(PREFERENCE_KEY);
+  let navigation = {};
+  let controlLearn = null;
+  let accessStatus = "Initializing…";
+  let statusTimer;
+  const navigationControls = createNavigationControls(slotsPanel);
+  const suppressed = new Set();
+
+  function refresh() {
+    window.updateMidiDeviceList?.();
+  }
+
+  function reservedControl(control) {
+    if (!isNanoPad) return false;
+    if (control.type === "cc") return [1, 2, 16].includes(control.number);
+    return sceneForNote(midiMapping, currentScene, control.number) !== -1;
+  }
+
+  function assignNavigation(action, control) {
+    if (!activeDevice) return "Select a MIDI input first.";
+    if (!Object.hasOwn(NAVIGATION_ACTIONS, action)) return "Unknown MIDI action.";
+    const binding = normalizeControl(control, isContinuousAction(action));
+    if (control && !binding) return "Use a MIDI CC for this selector.";
+    if (binding && reservedControl(binding)) return "This control is reserved for the nanoPAD2.";
+    const conflict =
+      binding &&
+      Object.keys(navigation).find(
+        (other) => other !== action && controlKey(navigation[other]) === controlKey(binding),
+      );
+    if (conflict) return `Already assigned to ${NAVIGATION_ACTIONS[conflict]}.`;
+    const next = { ...navigation };
+    if (binding) next[action] = binding;
+    else delete next[action];
+    if (!storage.setJSON(profileKey(activeDevice), next)) return "Could not save the profile.";
+    navigation = next;
+    navigationControls.reset();
+    return null;
+  }
+
   // Initialize global XY pad values
   window.nanoX = 0.5;
   window.nanoY = 0.5;
@@ -58,12 +114,9 @@ export function createMidiManager(slotsPanel) {
     midiStatus.style.display = "block";
     midiStatus.style.opacity = "1";
 
-    // Auto hide after 5 seconds
-    setTimeout(() => {
-      midiStatus.style.opacity = "0";
-      setTimeout(() => {
-        midiStatus.style.display = "none";
-      }, 500);
+    clearTimeout(statusTimer);
+    statusTimer = setTimeout(() => {
+      midiStatus.style.display = "none";
     }, 5000);
   }
 
@@ -75,13 +128,10 @@ export function createMidiManager(slotsPanel) {
       return false;
     }
 
-    navigator.requestMIDIAccess({ sysex: true }).then(onMIDISuccess, onMIDIFailure);
-
-    console.log(
-      "MIDI Debug Info: If your scene buttons aren't recognized, " +
-        "press them and check the console log to see their MIDI messages. " +
-        "Then you can add them to the supported patterns.",
-    );
+    navigator
+      .requestMIDIAccess({ sysex: true })
+      .catch(() => navigator.requestMIDIAccess())
+      .then(onMIDISuccess, onMIDIFailure);
 
     return true;
   }
@@ -93,68 +143,57 @@ export function createMidiManager(slotsPanel) {
     // Listen for connect/disconnect events
     midiAccess.onstatechange = onStateChange;
 
-    // Check if any MIDI inputs exist
-    if (midiAccess.inputs.size === 0) {
-      showMidiStatus("No MIDI devices found. Please connect one.");
-      return;
-    }
-
-    // Find the first available input device (default behavior)
-    connectToFirstAvailableDevice();
+    updateConnection();
   }
 
-  // Connect to the first available MIDI device
-  function connectToFirstAvailableDevice() {
-    for (const entry of midiAccess.inputs) {
-      const input = entry[1];
-      connectToDevice(input);
-      break;
-    }
+  function availableDevices() {
+    return [...(midiAccess?.inputs.values() ?? [])].filter(
+      (input) => input.state !== "disconnected",
+    );
   }
 
-  // Connect to a specific MIDI device
-  async function connectToDevice(device) {
-    // Close any existing connection
-    if (activeDevice) {
-      activeDevice.onmidimessage = null;
-    }
-
-    activeDevice = device;
-    activeDevice.onmidimessage = onMIDIMessage;
-    isConnected = true;
-
-    // Check if it's a nanoPAD or similar
-    isNanoPad = device.name.toLowerCase().includes("nanopad");
-    showMidiStatus(`Connected to ${device.name}`, false);
-
-    console.log(`MIDI connected: ${activeDevice.name}`);
-  }
-
-  // Handle MIDI connection/disconnection
-  function onStateChange(event) {
-    // Check if a device was connected
-    if (event.port.state === "connected" && event.port.type === "input") {
-      if (!isConnected) {
-        connectToDevice(event.port);
+  function updateConnection() {
+    const inputs = availableDevices();
+    const device = preferredId
+      ? inputs.find((input) => input.id === preferredId)
+      : (inputs.find((input) => input === activeDevice) ?? inputs[0]);
+    if ((device ?? null) !== activeDevice) {
+      if (activeDevice) activeDevice.onmidimessage = null;
+      activeDevice = device ?? null;
+      isConnected = Boolean(device);
+      isNanoPad = device?.name?.toLowerCase().includes("nanopad") ?? false;
+      currentScene = slotsPanel?.getBank?.() ?? 0;
+      navigation = device ? normalizeNavigationProfile(storage.getJSON(profileKey(device))) : {};
+      navigationControls.reset();
+      suppressed.clear();
+      controlLearn = null;
+      isLearning = false;
+      learnCallback = null;
+      slotsPanel?.clearPending?.();
+      if (device) {
+        device.onmidimessage = (message) => {
+          if (activeDevice === device && device.state !== "disconnected") onMIDIMessage(message);
+        };
       }
-      showMidiStatus(`Connected: ${event.port.name}`);
     }
+    accessStatus = device
+      ? device.name || "Unknown device"
+      : preferredId
+        ? "Selected input unavailable"
+        : "No devices found";
+    refresh();
+  }
 
-    // Check if the active device was disconnected
-    if (event.port.state === "disconnected" && activeDevice && event.port.id === activeDevice.id) {
-      isConnected = false;
-      activeDevice = null;
-      showMidiStatus("MIDI device disconnected");
-
-      // Try to connect to another device if available
-      connectToFirstAvailableDevice();
-    }
+  function onStateChange(event) {
+    if (event.port.type === "input") updateConnection();
   }
 
   // Handle MIDI failure
   function onMIDIFailure(error) {
     console.error("MIDI access failed:", error);
+    accessStatus = "Access failed. Check permissions.";
     showMidiStatus("MIDI access failed. Check permissions.", true);
+    refresh();
   }
 
   // Track the current scene on the nanoPAD
@@ -169,6 +208,31 @@ export function createMidiManager(slotsPanel) {
   // Handle MIDI messages
   function onMIDIMessage(message) {
     const data = message.data;
+    if (!data?.length) return;
+    const control = readMidiControl(data);
+    if (control) {
+      const key = controlKey(control);
+      if (suppressed.has(key)) {
+        if (control.value < (control.type === "cc" ? 64 : 1)) suppressed.delete(key);
+        return;
+      }
+      if (controlLearn) {
+        const { continuous, callback } = controlLearn;
+        if (continuous ? control.type === "cc" : control.value > 0) {
+          controlLearn = null;
+          if (!continuous) suppressed.add(key);
+          callback(normalizeControl(control));
+        }
+        return;
+      }
+      if (!isLearning && !reservedControl(control)) {
+        const action = Object.keys(navigation).find((name) => controlKey(navigation[name]) === key);
+        if (action) {
+          navigationControls.dispatch(action, navigation[action], control);
+          return;
+        }
+      }
+    }
     const cmd = data[0] & 0xf0; // Command byte (top 4 bits)
     const channel = data[0] & 0x0f; // Channel (bottom 4 bits)
 
@@ -228,7 +292,7 @@ export function createMidiManager(slotsPanel) {
         break;
       case 0xb0:
         messageType = "Control Change";
-        if (xyPadPanel && data[1] === 16 && data[2] === 0) {
+        if (isNanoPad && xyPadPanel && data[1] === 16 && data[2] === 0) {
           xyPadPanel.handlePadRelease();
         }
         break;
@@ -247,7 +311,7 @@ export function createMidiManager(slotsPanel) {
     }
 
     // Special case for SysEx messages (240 = 0xF0)
-    if (data[0] === 240) {
+    if (isNanoPad && data[0] === 240) {
       // Check for nanoPAD2 scene change SysEx messages
       // Pattern: [240, 66, 64, 0, 1, 18, 0, 95, 79, sceneNumber, 247]
       if (data[1] === 66 && data[2] === 64 && data[8] === 79) {
@@ -566,28 +630,49 @@ export function createMidiManager(slotsPanel) {
       }
       return false;
     },
-    // Allow manual connection to a specific device by index
-    connectToDeviceByIndex: (index) => {
-      if (!midiAccess) return false;
-
-      const inputs = Array.from(midiAccess.inputs.values());
-      if (index >= 0 && index < inputs.length) {
-        connectToDevice(inputs[index]);
-        return true;
+    getAccessStatus: () => accessStatus,
+    getPreferredId: () => preferredId,
+    selectDevice: (id) => {
+      if (id !== null && !availableDevices().some((input) => input.id === id)) return false;
+      if (!(id === null ? storage.remove(PREFERENCE_KEY) : storage.set(PREFERENCE_KEY, id))) {
+        return false;
       }
-
-      return false;
+      preferredId = id;
+      updateConnection();
+      return true;
     },
-    // List available devices
-    listDevices: () => {
-      if (!midiAccess) return [];
-
-      return Array.from(midiAccess.inputs.values()).map((input) => ({
+    connectToDeviceByIndex: (index) => {
+      const input = availableDevices()[index];
+      if (!input || !storage.set(PREFERENCE_KEY, input.id)) return false;
+      preferredId = input.id;
+      updateConnection();
+      return true;
+    },
+    listDevices: () =>
+      availableDevices().map((input) => ({
         id: input.id,
         name: input.name,
         manufacturer: input.manufacturer,
-        isActive: activeDevice && input.id === activeDevice.id,
-      }));
+        isActive: activeDevice === input,
+      })),
+    getNavigation: () => structuredClone(navigation),
+    assignNavigation,
+    resetNavigation: () => {
+      if (!activeDevice || !storage.remove(profileKey(activeDevice))) return false;
+      navigation = {};
+      navigationControls.reset();
+      slotsPanel?.clearPending?.();
+      return true;
+    },
+    learnControl: (continuous, callback) => {
+      if (!activeDevice) return false;
+      isLearning = false;
+      learnCallback = null;
+      controlLearn = { continuous, callback };
+      return true;
+    },
+    cancelControlLearn: () => {
+      controlLearn = null;
     },
     // Get the current MIDI mapping for reference
     getMidiMapping: () => {
@@ -654,6 +739,7 @@ export function createMidiManager(slotsPanel) {
 
     // Start MIDI learn mode
     startLearnMode: (callback) => {
+      controlLearn = null;
       isLearning = true;
       learnCallback = callback;
       showMidiStatus("Press a pad to map it...", false);

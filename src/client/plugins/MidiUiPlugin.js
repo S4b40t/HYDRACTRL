@@ -1,184 +1,166 @@
-/**
- * MidiUiPlugin - MIDI status and device controls in the stats panel.
- *
- * Renders the device list, the refresh / scene-sync / mapping buttons and the
- * connection status text. The MIDI engine itself (MidiManager) stays in the
- * core — this plugin is only the UI around it.
- *
- * Exposes `window.updateMidiDeviceList` because MidiManager refreshes the
- * list through it when devices or scenes change.
- */
+import { NAVIGATION_ACTIONS, isContinuousAction } from "../core/midiControls.js";
+
+function button(text, action) {
+  const element = document.createElement("button");
+  element.type = "button";
+  element.textContent = text;
+  element.addEventListener("click", action);
+  return element;
+}
+
+function bindingLabel(binding) {
+  if (!binding) return "Unassigned";
+  const type = binding.type === "cc" ? "CC" : "Note";
+  return `${type} ${binding.number} · Ch ${binding.channel + 1}${binding.mode ? " · Toggle" : ""}`;
+}
 
 export function createMidiUiPlugin() {
   return {
     id: "midi-ui",
     name: "MIDI Device UI",
-    description: "MIDI device list and controls in the stats panel",
+    description: "MIDI device selection and mapping in the stats panel",
 
     setup(ctx) {
-      const stats = ctx.getPanels().stats;
+      const midi = ctx.getPanels().stats?.midi;
       const manager = ctx.midi?.manager;
-      // No MIDI section on phones and tablets
-      if (ctx.isMobile || !stats?.midi || !manager) return;
-
+      if (ctx.isMobile || !midi || !manager) return;
       if (!ctx.midi.supported) {
-        stats.midi.statusText.textContent = "MIDI: Not supported";
-        stats.midi.statusText.style.color = "#ff5555"; // Red
+        midi.statusText.textContent = "MIDI unavailable in this browser";
         return;
       }
 
-      stats.midi.statusText.textContent = "MIDI: Initializing...";
+      const deviceSelect = document.createElement("select");
+      deviceSelect.setAttribute("aria-label", "MIDI input");
+      const config = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = "MIDI mappings";
+      const form = document.createElement("div");
+      const feedback = document.createElement("div");
+      feedback.setAttribute("role", "status");
+      feedback.style.padding = "4px 0";
 
-      function updateMidiDeviceList() {
-        // Clear device container except for the buttons
-        while (stats.midi.deviceContainer.children.length > 2) {
-          stats.midi.deviceContainer.removeChild(stats.midi.deviceContainer.lastChild);
-        }
-
-        // Get device list
-        const devices = manager.listDevices();
-
-        if (devices.length === 0) {
-          stats.midi.statusText.textContent = "MIDI: No devices found";
-          return;
-        }
-
-        // Update status text with active device
-        const activeDevice = manager.getActiveDevice();
-        if (activeDevice) {
-          stats.midi.statusText.textContent = `MIDI: ${activeDevice.name || "Unknown Device"}`;
-
-          // Highlight nanoPAD if connected
-          if (
-            activeDevice.name &&
-            (activeDevice.name.toLowerCase().includes("nanopad") ||
-              activeDevice.name.toLowerCase().includes("korg"))
-          ) {
-            stats.midi.statusText.style.color = "var(--color-midi-active, #50fa7b)"; // Green
-          } else {
-            stats.midi.statusText.style.color = "var(--color-midi-idle, #aaa)";
-          }
-        } else {
-          stats.midi.statusText.textContent = "MIDI: No active device";
-          stats.midi.statusText.style.color = "var(--color-midi-idle, #aaa)";
-        }
-
-        // Add device buttons
-        devices.forEach((device, index) => {
-          const deviceButton = document.createElement("button");
-          deviceButton.textContent = device.name || `Device ${index + 1}`;
-          deviceButton.style.fontSize = "11px";
-          deviceButton.style.padding = "2px 8px";
-
-          if (device.isActive) {
-            deviceButton.style.backgroundColor = "rgba(80, 250, 123, 0.3)";
-          }
-
-          deviceButton.addEventListener("click", () => {
-            manager.connectToDeviceByIndex(index);
-            updateMidiDeviceList();
-          });
-
-          stats.midi.deviceContainer.appendChild(deviceButton);
-        });
+      function cancelLearn() {
+        manager.cancelControlLearn();
+        feedback.textContent = "";
       }
 
-      // MidiManager refreshes the list through this global on device/scene changes
-      window.updateMidiDeviceList = updateMidiDeviceList;
+      function learn(label, continuous, assign) {
+        if (
+          !manager.learnControl(continuous, (binding) => {
+            feedback.textContent = assign(binding) || `Assigned ${label}.`;
+            renderMappings();
+          })
+        ) {
+          feedback.textContent = "Select a MIDI input first.";
+          return;
+        }
+        feedback.textContent = continuous
+          ? `Move a fader or knob for ${label}.`
+          : `Press a button for ${label}.`;
+      }
 
-      // Add refresh button
-      const refreshButton = document.createElement("button");
-      refreshButton.textContent = "Refresh MIDI";
-      refreshButton.style.fontSize = "11px";
-      refreshButton.style.padding = "2px 8px";
-      refreshButton.style.width = "fit-content";
+      function mappingRow(label, binding, continuous, assign) {
+        const row = document.createElement("div");
+        row.style.marginBottom = "5px";
+        const title = document.createElement("div");
+        title.textContent = `${label} · ${bindingLabel(binding)}`;
+        row.append(
+          title,
+          button("Learn", () => learn(label, continuous, assign)),
+        );
+        if (binding) {
+          const change = (next) => {
+            cancelLearn();
+            feedback.textContent = assign(next) || "";
+            renderMappings();
+          };
+          if (!continuous && binding.type === "cc") {
+            row.append(
+              button(binding.mode ? "Use momentary" : "Use toggle", () =>
+                change({ ...binding, mode: binding.mode ? undefined : "toggle" }),
+              ),
+            );
+          }
+          row.append(button("Clear", () => change(null)));
+        }
+        return row;
+      }
 
-      refreshButton.addEventListener("click", () => {
-        updateMidiDeviceList();
-      });
+      function renderMappings() {
+        form.replaceChildren();
+        if (!manager.getActiveDevice()) return;
+        const navigation = manager.getNavigation();
+        for (const [action, label] of Object.entries(NAVIGATION_ACTIONS)) {
+          form.append(
+            mappingRow(label, navigation[action], isContinuousAction(action), (binding) =>
+              manager.assignNavigation(action, binding),
+            ),
+          );
+        }
+        form.append(
+          button("Reset navigation", () => {
+            cancelLearn();
+            feedback.textContent = manager.resetNavigation()
+              ? "Navigation profile cleared."
+              : "Could not clear the profile.";
+            renderMappings();
+          }),
+        );
+        if (manager.getActiveDevice().name?.toLowerCase().includes("nanopad")) {
+          form.append(
+            button("Sync Scene ⟷ Bank", () => manager.setScene(ctx.getPanels().slots.getBank())),
+            button("Show pad notes", () => {
+              const bank = manager.getCurrentScene();
+              const notes = manager.getMidiMapping()[bank].sort((a, b) => a.slot - b.slot);
+              alert(
+                `Bank ${bank + 1}\n${notes.map(({ note, slot }) => `Note ${note} → Slot ${slot + 1}`).join("\n")}`,
+              );
+            }),
+            button("Reset pad notes", () => {
+              if (confirm("Reset nanoPAD2 notes to defaults?")) manager.resetToDefaultMapping();
+            }),
+          );
+        }
+      }
 
-      // Add sync nanoPAD scenes button
-      const syncButton = document.createElement("button");
-      syncButton.textContent = "Sync Scene ⟷ Bank";
-      syncButton.style.fontSize = "11px";
-      syncButton.style.padding = "2px 8px";
-      syncButton.style.backgroundColor = "rgba(80, 250, 123, 0.2)";
-      syncButton.title = "Synchronize nanoPAD scene with current bank";
+      function updateDeviceList() {
+        const preferred = manager.getPreferredId();
+        const devices = manager.listDevices();
+        deviceSelect.replaceChildren(new Option("Automatic MIDI input", ""));
+        for (const device of devices) {
+          const label = device.name || "Unknown device";
+          deviceSelect.add(new Option(label, device.id));
+        }
+        if (preferred !== null && !devices.some(({ id }) => id === preferred)) {
+          deviceSelect.add(new Option("Saved input unavailable", preferred));
+        }
+        deviceSelect.value = preferred ?? "";
+        midi.statusText.textContent = `MIDI · ${manager.getAccessStatus()}`;
+        renderMappings();
+      }
 
-      syncButton.addEventListener("click", () => {
-        const slots = ctx.getPanels().slots;
-        if (slots) {
-          // Set MIDI scene to match current bank
-          const currentBank = slots.getBank();
-          manager.setScene(currentBank);
-          updateMidiDeviceList();
-
-          ctx.notify(`Synced nanoPAD Scene ${currentBank + 1} with Bank ${currentBank + 1}`, {
-            type: "success",
-          });
+      deviceSelect.addEventListener("change", () => {
+        cancelLearn();
+        if (!manager.selectDevice(deviceSelect.value || null)) {
+          feedback.textContent = "Could not select the MIDI input.";
+          updateDeviceList();
         }
       });
-
-      // Add reset mapping button
-      const resetButton = document.createElement("button");
-      resetButton.textContent = "Reset MIDI Mapping";
-      resetButton.style.fontSize = "11px";
-      resetButton.style.padding = "2px 8px";
-      resetButton.style.backgroundColor = "rgba(255, 120, 120, 0.2)";
-      resetButton.title = "Reset to default nanoPAD mapping";
-
-      resetButton.addEventListener("click", () => {
-        if (manager.resetToDefaultMapping && confirm("Reset MIDI mapping to defaults?")) {
-          manager.resetToDefaultMapping();
-          ctx.notify("MIDI mapping reset to defaults", { type: "error", duration: 2000 });
-        }
+      config.addEventListener("toggle", () => {
+        if (!config.open) cancelLearn();
       });
-
-      // Add info button that shows current mapping
-      const infoButton = document.createElement("button");
-      infoButton.textContent = "Show Mapping";
-      infoButton.style.fontSize = "11px";
-      infoButton.style.padding = "2px 8px";
-      infoButton.title = "Show current MIDI mapping";
-
-      infoButton.addEventListener("click", () => {
-        if (manager.getMidiMapping) {
-          const mapping = manager.getMidiMapping();
-          const currentBank = manager.getCurrentScene();
-
-          // Create a formatted display of the current bank's mapping
-          let message = `MIDI Mapping for Bank ${currentBank + 1}:\n`;
-
-          // Sort by slot for better display
-          const sortedMapping = [...mapping[currentBank]].sort((a, b) => a.slot - b.slot);
-
-          sortedMapping.forEach((map) => {
-            message += `MIDI Note ${map.note} → Slot ${map.slot + 1}\n`;
-          });
-
-          alert(message);
-        }
-      });
-
-      // Add buttons to device container
-      const lineBreak = document.createElement("br");
-      stats.midi.deviceContainer.appendChild(refreshButton);
-      stats.midi.deviceContainer.appendChild(syncButton);
-      stats.midi.deviceContainer.appendChild(lineBreak);
-      stats.midi.deviceContainer.appendChild(infoButton);
-      stats.midi.deviceContainer.appendChild(resetButton);
-
-      // Initial update of device list, once devices have had time to register
-      const initialTimer = setTimeout(updateMidiDeviceList, 1000);
+      config.append(summary, feedback, button("Cancel Learn", cancelLearn), form);
+      midi.deviceContainer.append(deviceSelect, config);
+      window.updateMidiDeviceList = updateDeviceList;
+      updateDeviceList();
 
       return {
-        api: { updateDeviceList: updateMidiDeviceList },
+        api: { updateDeviceList },
         dispose() {
-          clearTimeout(initialTimer);
-          for (const el of [refreshButton, syncButton, lineBreak, infoButton, resetButton]) {
-            el.remove();
-          }
-          if (window.updateMidiDeviceList === updateMidiDeviceList) {
+          cancelLearn();
+          deviceSelect.remove();
+          config.remove();
+          if (window.updateMidiDeviceList === updateDeviceList) {
             window.updateMidiDeviceList = undefined;
           }
         },

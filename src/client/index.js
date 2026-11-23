@@ -713,47 +713,10 @@ async function init() {
         }
       }
 
-      // Alt+Left/Right arrow keys to cycle between banks (only when no MIDI device is connected)
-      if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-        if (e.code === "ArrowLeft" && window.slotsPanel && window.slotsPanel.cycleBank) {
-          /* Use e.code */
-          // Check if MIDI device is connected
-          const midiConnected =
-            window.midiManager &&
-            window.midiManager.isConnected &&
-            window.midiManager.isConnected();
-
-          // Only allow keyboard navigation when no MIDI device is connected
-          if (!midiConnected) {
-            e.preventDefault();
-            window.slotsPanel.cycleBank(-1); // Previous bank
-
-            // Flash the bank dot for visual feedback
-            if (window.flashActiveBankDot) {
-              window.flashActiveBankDot(window.slotsPanel.getBank());
-            }
-          }
-        }
-
-        if (e.code === "ArrowRight" && window.slotsPanel && window.slotsPanel.cycleBank) {
-          /* Use e.code */
-          // Check if MIDI device is connected
-          const midiConnected =
-            window.midiManager &&
-            window.midiManager.isConnected &&
-            window.midiManager.isConnected();
-
-          // Only allow keyboard navigation when no MIDI device is connected
-          if (!midiConnected) {
-            e.preventDefault();
-            window.slotsPanel.cycleBank(1); // Next bank
-
-            // Flash the bank dot for visual feedback
-            if (window.flashActiveBankDot) {
-              window.flashActiveBankDot(window.slotsPanel.getBank());
-            }
-          }
-        }
+      if (e.altKey && window.slotsPanel && (e.code === "ArrowLeft" || e.code === "ArrowRight")) {
+        e.preventDefault();
+        window.slotsPanel.cycleBank(e.code === "ArrowLeft" ? -1 : 1);
+        window.flashActiveBankDot?.(window.slotsPanel.getBank());
       }
     });
 
