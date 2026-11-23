@@ -77,7 +77,7 @@ export function createNavigationControls(slots) {
       const key = controlKey(control);
       const previous = buttonStates.get(key);
       buttonStates.set(key, control.value);
-      return previous === undefined ? control.value === 127 : previous !== control.value;
+      return previous !== control.value;
     }
     const key = controlKey(control);
     const down = control.value >= (control.type === "note" ? 1 : 64);

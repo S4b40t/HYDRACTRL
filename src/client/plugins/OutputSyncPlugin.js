@@ -83,6 +83,7 @@ export function createOutputSyncPlugin(options = {}) {
         const message = { type: "sketch", setup: sketch.setup || "", main: sketch.main };
         // Ran on the desktop app's own output first, which then skips it
         if (sketch.runId) message.runId = sketch.runId;
+        if (sketch.parameterRun) message.parameterRun = sketch.parameterRun;
         return socket.send(message);
       }
 
@@ -141,6 +142,17 @@ export function createOutputSyncPlugin(options = {}) {
         pushSketch(sketch);
       });
 
+      function pushCurrentSketch() {
+        const sent = pushSketch(ctx.getRunningSketch?.() ?? currentSketch());
+        if (sent) pushParameters(ctx.getSketchParameters?.());
+        return sent;
+      }
+
+      function pushParameters(state) {
+        if (state) socket?.send({ type: "parameters", ...state });
+      }
+      const offParameters = ctx.events.on("sketch:parameters", pushParameters);
+
       const offOverlay = ctx.events.on("overlay:changed", (settings) => {
         if (!settings || typeof settings.visible !== "boolean") return;
         const { visible, slots: showSlots, blendMode, opacity } = settings;
@@ -185,7 +197,7 @@ export function createOutputSyncPlugin(options = {}) {
           url,
           onOpen: (link) => {
             link.send({ type: "hello", role: "controller" });
-            pushSketch(currentSketch());
+            pushCurrentSketch();
             pushState(true);
             pushOverlay();
             pushEditor();
@@ -213,11 +225,12 @@ export function createOutputSyncPlugin(options = {}) {
         api: {
           isConnected: () => socket !== null && socket.isOpen(),
           outputCount: () => outputCount,
-          pushSketch: () => pushSketch(currentSketch()),
+          pushSketch: pushCurrentSketch,
         },
         dispose() {
           disposed = true;
           offRun();
+          offParameters();
           offOverlay();
           offEditor();
           offSlots();

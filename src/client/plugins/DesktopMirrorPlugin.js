@@ -18,7 +18,7 @@
  */
 import { createReconnectingSocket } from "../core/ReconnectingSocket.js";
 import { buildOutputSocketUrl } from "../core/outputProtocol.js";
-import { executeSketch } from "../core/sketchRunner.js";
+import { applySketchParameters, executeSketch } from "../core/sketchRunner.js";
 
 /** Frames to wait for once the output is ready, so the switch never shows a stale one. */
 export const SETTLE_FRAMES = 3;
@@ -144,7 +144,7 @@ export function createDesktopMirrorPlugin(options = {}) {
       let framesDrawn = 0;
       let frameSize = null;
       let lastFrameAt = 0;
-      let lastGood = null;
+      let lastGood = ctx.getRunningSketch?.() ?? null;
       let drawErrorLogged = false;
       let disposed = false;
       const pending = new Map();
@@ -172,7 +172,11 @@ export function createDesktopMirrorPlugin(options = {}) {
         framesSinceReady = 0;
         ctx.setSketchRunner(null);
         view.show(false);
-        if (restore) execute(ctx.hydra, lastGood ?? editorSketch(ctx.editor));
+        if (restore) {
+          execute(ctx.hydra, lastGood ?? editorSketch(ctx.editor)).then(() => {
+            applySketchParameters(ctx.hydra, ctx.getSketchParameters?.(), true);
+          });
+        }
         ctx.renderLoop.start();
         console.info(`[desktop-mirror] rendering here again: ${reason}`);
         ctx.events.emit("mirror:changed", { active: false });
@@ -236,8 +240,9 @@ export function createDesktopMirrorPlugin(options = {}) {
             RUN_TIMEOUT_MS,
           );
           pending.set(id, { resolve, timer });
-          const sent =
-            socket?.send({ type: "run", id, setup: sketch.setup, main: sketch.main }) ?? false;
+          const message = { type: "run", id, setup: sketch.setup, main: sketch.main };
+          if (sketch.parameterRun) message.parameterRun = sketch.parameterRun;
+          const sent = socket?.send(message) ?? false;
           if (!sent) {
             settle(id, { success: false, message: "Not connected", reason: "no-output" });
           }
@@ -247,7 +252,11 @@ export function createDesktopMirrorPlugin(options = {}) {
           deactivate("the output went away", { restore: false });
           return execute(ctx.hydra, sketch);
         }
-        if (result.success) return { success: true, runId: id };
+        if (result.success) {
+          return result.parameters
+            ? { success: true, runId: id, parameters: result.parameters }
+            : { success: true, runId: id };
+        }
         return { success: false, message: result.message || "The output couldn't run the sketch" };
       }
 
@@ -289,6 +298,7 @@ export function createDesktopMirrorPlugin(options = {}) {
 
       const offRun = ctx.events.on("sketch:run", (sketch) => {
         lastGood = { setup: sketch?.setup || "", main: sketch?.main || "" };
+        if (sketch?.parameterRun) lastGood.parameterRun = sketch.parameterRun;
       });
 
       const stallTimer = timers.setInterval(() => {

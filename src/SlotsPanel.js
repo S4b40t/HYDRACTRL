@@ -2,8 +2,10 @@
  * Slots Panel Component
  * A draggable panel with 16 slots for saving and loading Hydra programs
  */
+import { createSafeStorage } from "./client/core/Storage.js";
 import { showChoiceDialog } from "./client/core/choiceDialog.js";
 import { notify, notifyError } from "./client/core/notify.js";
+import { normalizeParameterMappings } from "./client/core/parameterMappings.js";
 import { trackPointerDrag } from "./utils/Draggable.js";
 import { loadPanelPosition, savePanelPosition } from "./utils/PanelStorage.js";
 
@@ -22,6 +24,22 @@ const STORAGE_KEY_PREFIX = "hydractrl-slot-";
 
 // Storage key includes bank
 const slotStorageKey = (bank, index) => `${STORAGE_KEY_PREFIX}bank-${bank}-slot-${index}`;
+
+function parameterMappingKey(bank, slot) {
+  return `${slotStorageKey(bank, slot)}-midi`;
+}
+
+export function createSlotParameterStorage(storage) {
+  return {
+    read: ({ bank, slot }) =>
+      normalizeParameterMappings(storage.getJSON(parameterMappingKey(bank, slot))),
+    write: ({ bank, slot }, mappings) => {
+      const key = parameterMappingKey(bank, slot);
+      if (mappings.size && !storage.get(slotStorageKey(bank, slot))) return false;
+      return mappings.size ? storage.setJSON(key, [...mappings]) : storage.remove(key);
+    },
+  };
+}
 
 /**
  * Remove saved slots from `storage` (local storage): the 16 of one scene
@@ -46,6 +64,7 @@ export function clearStoredSlots(storage, what, scene = 0) {
       const key = slotStorageKey(bank, slot);
       if (storage.getItem(key) !== null) removed++;
       storage.removeItem(key);
+      storage.removeItem(parameterMappingKey(bank, slot));
       storage.removeItem(`${key}-thumbnail`);
       storage.removeItem(`${key}-thumbnail-timestamp`);
     }
@@ -333,6 +352,19 @@ export function createSlotsPanel(editor, hydra, runCode, mobilePosition = false,
   let pending = null;
 
   const getStorageKey = slotStorageKey;
+  const parameterStorage = createSlotParameterStorage(createSafeStorage());
+  let editorSlot = null;
+
+  function storeImportedSlot(bank, slot, decodedCode) {
+    const location = { bank, slot: slot.slotIndex };
+    const key = getStorageKey(bank, slot.slotIndex);
+    const previous = localStorage.getItem(key);
+    localStorage.setItem(key, decodedCode);
+    if (parameterStorage.write(location, normalizeParameterMappings(slot.midi))) return;
+    if (previous === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, previous);
+    throw new Error("Could not save imported MIDI assignments.");
+  }
 
   // Store slot elements for easy access
   const slotElements = [];
@@ -395,7 +427,7 @@ export function createSlotsPanel(editor, hydra, runCode, mobilePosition = false,
     pending = target;
     pendingIndicator.hidden = !pending;
     pendingIndicator.textContent = pending
-      ? `Pending ${pending.bank + 1} / ${pending.slot + 1}`
+      ? `Pending slot ${pending.slot + 1} · Bank ${pending.bank + 1}`
       : "";
     if (pending) {
       const marker =
@@ -505,14 +537,10 @@ export function createSlotsPanel(editor, hydra, runCode, mobilePosition = false,
     // Update bank indicator in title
     title.textContent = `SCENE ${bankIndex + 1}`;
 
-    // Update bank dots styling
-    updateBankDots();
-
-    // Load all thumbnails for the new bank
     loadAllSlotsForCurrentBank();
-
-    // Set the slot as active
-    setActiveSlot(slot);
+    const loading = setActiveSlot(slot);
+    updateBankDots();
+    return loading;
   }
 
   // Function to update active slot styling
@@ -572,12 +600,13 @@ export function createSlotsPanel(editor, hydra, runCode, mobilePosition = false,
       // Save to localStorage with bank and slot index
       const storageKey = getStorageKey(targetBank, targetSlot);
       localStorage.setItem(storageKey, codeToSave);
+      editorSlot = { bank: targetBank, slot: targetSlot };
 
       // Update bank dots to reflect new content
       updateBankDots();
 
       // Run the code first (to ensure visuals are updated) then capture screenshot
-      const success = await runCode(editor, hydra);
+      const success = await runCode(editor, hydra, editorSlot);
       if (success) {
         // Capture screenshot with a longer delay to ensure rendering is complete
         // Pass the target bank and slot explicitly to ensure it's saved to the right place
@@ -617,6 +646,7 @@ export function createSlotsPanel(editor, hydra, runCode, mobilePosition = false,
     const savedCode = localStorage.getItem(storageKey);
 
     if (savedCode) {
+      editorSlot = { bank: currentBank, slot: index };
       // The editor shows the Sketch tab with the slot's code; the setup
       // code stays as it is
       editor.dispatch({
@@ -630,7 +660,7 @@ export function createSlotsPanel(editor, hydra, runCode, mobilePosition = false,
 
       // Run the code if requested
       if (runCodeAfterLoad) {
-        await runCode(editor, hydra);
+        await runCode(editor, hydra, editorSlot);
       }
 
       return true;
@@ -1036,6 +1066,9 @@ export function createSlotsPanel(editor, hydra, runCode, mobilePosition = false,
             code: btoa(encodeURIComponent(code)), // Safe base64 encoding
           };
 
+          const mappings = parameterStorage.read({ bank: bankIndex, slot: slotIndex });
+          if (mappings.size) slotData.midi = [...mappings];
+
           // Always include thumbnails in exports if available
           // Since we're now using tiny thumbnails, they should be small enough
           if (thumbnail) {
@@ -1151,14 +1184,7 @@ export function createSlotsPanel(editor, hydra, runCode, mobilePosition = false,
       throw new Error("Invalid scenes data format");
     }
 
-    // Clear all existing scenes silently (all 4 banks)
-    for (let bank = 0; bank < 4; bank++) {
-      for (let slot = 0; slot < 16; slot++) {
-        localStorage.removeItem(getStorageKey(bank, slot));
-        localStorage.removeItem(`${getStorageKey(bank, slot)}-thumbnail`);
-        localStorage.removeItem(`${getStorageKey(bank, slot)}-thumbnail-timestamp`);
-      }
-    }
+    clearStoredSlots(localStorage, "all");
 
     // Import all banks and slots from the random file
     scenesData.banks.forEach((bankData) => {
@@ -1173,7 +1199,7 @@ export function createSlotsPanel(editor, hydra, runCode, mobilePosition = false,
 
               // Save to localStorage
               const storageKey = getStorageKey(bankIndex, slot.slotIndex);
-              localStorage.setItem(storageKey, decodedCode);
+              storeImportedSlot(bankIndex, slot, decodedCode);
 
               // Save thumbnail if available in the imported data
               if (slot.thumbnail) {
@@ -1199,11 +1225,8 @@ export function createSlotsPanel(editor, hydra, runCode, mobilePosition = false,
         const storageKey = getStorageKey(bankIndex, slotIndex);
         if (localStorage.getItem(storageKey)) {
           // Switch to the bank if needed
-          if (bankIndex !== currentBank) {
-            switchBank(bankIndex);
-          }
-          // Set and load the first slot
-          setActiveSlot(slotIndex, true);
+          if (bankIndex !== currentBank) switchBank(bankIndex, slotIndex);
+          else setActiveSlot(slotIndex);
           firstSlotExecuted = true;
           break;
         }
@@ -1273,7 +1296,7 @@ export function createSlotsPanel(editor, hydra, runCode, mobilePosition = false,
 
                       // Save to localStorage
                       const storageKey = getStorageKey(bankIndex, slot.slotIndex);
-                      localStorage.setItem(storageKey, decodedCode);
+                      storeImportedSlot(bankIndex, slot, decodedCode);
 
                       // Always remove existing thumbnail first
                       localStorage.removeItem(`${storageKey}-thumbnail`);
@@ -1303,11 +1326,8 @@ export function createSlotsPanel(editor, hydra, runCode, mobilePosition = false,
                 const storageKey = getStorageKey(bankIndex, slotIndex);
                 if (localStorage.getItem(storageKey)) {
                   // Switch to the bank if needed
-                  if (bankIndex !== currentBank) {
-                    switchBank(bankIndex);
-                  }
-                  // Set and load the first slot
-                  setActiveSlot(slotIndex, true);
+                  if (bankIndex !== currentBank) switchBank(bankIndex, slotIndex);
+                  else setActiveSlot(slotIndex);
                   firstSlotExecuted = true;
                   break;
                 }
@@ -1395,6 +1415,7 @@ export function createSlotsPanel(editor, hydra, runCode, mobilePosition = false,
     getActiveSlotIndex: () => activeSlotIndex,
     getBank: () => currentBank,
     getState,
+    getEditorSlot: () => editorSlot,
     setPendingSlot,
     setPendingBank,
     cyclePendingBank,

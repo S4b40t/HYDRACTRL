@@ -15,16 +15,22 @@
  *   tagged with the id of the run that produced it; a sketch this output
  *   already ran as that run is not run twice.
  */
-import { checkSketchSyntax, executeSketch } from "./sketchRunner.js";
+import {
+  applySketchParameters,
+  checkSketchSyntax,
+  executeSketch,
+  readSketchParameters,
+} from "./sketchRunner.js";
 
 /** How many run ids to remember for skipping their broadcasts. */
 export const REMEMBERED_RUNS = 32;
 
 function normalize(sketch) {
-  return {
+  const code = {
     setup: typeof sketch?.setup === "string" ? sketch.setup : "",
     main: typeof sketch?.main === "string" ? sketch.main : "",
   };
+  return sketch?.parameterRun ? { ...code, parameterRun: sketch.parameterRun } : code;
 }
 
 export function createPrimaryRunner({
@@ -50,13 +56,17 @@ export function createPrimaryRunner({
   async function runGuarded(sketch) {
     const syntaxError = checkSyntax(sketch);
     if (syntaxError) return { success: false, message: syntaxError };
+    const previous = readSketchParameters(hydra);
     const result = await execute(hydra, sketch);
     if (result.success) {
       lastGood = sketch;
-      return { success: true };
+      return result;
     }
     // The failed run hushed the outputs: bring back what was playing
-    if (lastGood) await execute(hydra, lastGood);
+    if (lastGood) {
+      await execute(hydra, lastGood);
+      applySketchParameters(hydra, previous, true);
+    }
     return { success: false, message: result.message || "Unknown error" };
   }
 

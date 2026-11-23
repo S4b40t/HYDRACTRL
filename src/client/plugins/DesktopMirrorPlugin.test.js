@@ -469,6 +469,18 @@ describe("createDesktopMirrorPlugin", () => {
     t.plugin.dispose();
   });
 
+  test("relays a run's parameter token and returns the primary's declaration", async () => {
+    const t = await setup();
+    await t.goLive();
+    const sketch = { setup: "", main: "osc().out()", parameterRun: "parameters-1" };
+    const pending = t.runner()(sketch);
+    expect(t.socket.sent.at(-1)).toEqual({ type: "run", id: "t-1", ...sketch });
+    const parameters = [{ name: "Depth", default: 0, min: 0, max: 1 }];
+    t.socket.receive({ type: "result", id: "t-1", success: true, parameters });
+    expect(await pending).toEqual({ success: true, runId: "t-1", parameters });
+    t.plugin.dispose();
+  });
+
   test("a run the output doesn't answer fails without leaving the output", async () => {
     const t = await setup();
     await t.goLive();

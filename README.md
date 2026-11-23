@@ -18,7 +18,7 @@ HYDRACTRL comes in two flavours with the same interface, scenes and shortcuts:
 | --- | --- | --- |
 | Where | [hydractrl.d17e.dev/app](https://hydractrl.d17e.dev/app), nothing to install | macOS 11+ (Apple Silicon or Intel) and Windows 10/11 (64-bit), [download](https://hydractrl.d17e.dev/#download) |
 | Editor, 64 scenes, XY pad, docs, audio reactivity | Yes | Yes |
-| MIDI (Korg nanoPAD2) | Chrome and Edge | Yes |
+| MIDI (CC, Note On, Korg nanoPAD2) | Chrome and Edge | Yes |
 | Syphon (macOS) / Spout (Windows) output | No | Yes, 720p to 4K, 24 to 120 fps, optional alpha |
 | Images and videos dropped on the editor | No | Yes, from a media folder |
 
@@ -30,7 +30,7 @@ for how it works and how to build it.
 ## Features
 
 - **Scene management** — store and recall up to 64 scenes (4 banks × 16 slots) with thumbnail previews
-- **MIDI integration** — built for the Korg nanoPAD2, including its XY pad with a small physics engine for expressive control (mouse works too)
+- **MIDI integration** — learn scene navigation and live sketch controls, with dedicated Korg nanoPAD2 pad and XY support ([MIDI guide](./docs/MIDI.md))
 - **Advanced code editor** — CodeMirror 6 with Hydra syntax highlighting, code completion, multiple themes and error reporting
 - **Setup code tab** — code that runs before each sketch, for audio settings and globals
 - **Audio reactivity** — Hydra's `a.fft` data out of the box, from the audio input you choose in the system panel (the outputs listen to the same one), guarded by an audio watchdog that logs dropouts and auto-resumes suspended audio
@@ -54,7 +54,7 @@ for how it works and how to build it.
 | `Ctrl/⌘ + Y` | Toggle auto-run |
 | `Alt/⌥ + U` | Copy the current sketch as a shareable URL |
 | `Alt/⌥ + 0-9 / A-F` | Select slot 1-16 (HEX) in the current bank |
-| `Alt/⌥ + ←/→` | Cycle between banks (when no MIDI device is connected) |
+| `Alt/⌥ + ←/→` | Cycle between banks |
 | `Alt/⌥ + X` | Export scene bank |
 | `Alt/⌥ + I` | Import scene bank |
 

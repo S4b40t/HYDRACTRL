@@ -14,6 +14,7 @@
  *   client -> hub   { type: "hello", role: "controller" | "output", primary? }
  *   controller -> hub { type: "sketch", setup, main, runId? } fan-out to outputs
  *   controller -> hub { type: "state", nanoX?, nanoY? }      fan-out to outputs
+ *   controller -> hub { type: "parameters", parameterRun, values } fan-out to matching outputs
  *   controller -> hub { type: "overlay", visible, slots?, blendMode?, opacity? } fan-out to outputs
  *   controller -> hub { type: "editor", tab, code, anchor, head, dirty, changed, removed }
  *                                                            fan-out to outputs
@@ -37,6 +38,12 @@
  * at once with reason "no-output", so the interface never waits in vain.
  */
 
+import {
+  MAX_PARAMETERS,
+  MAX_PARAMETER_NAME,
+  normalizeParameter,
+} from "../client/core/sketchParameters.js";
+
 export type ClientRole = "controller" | "output";
 
 export interface HelloMessage {
@@ -52,6 +59,7 @@ export interface SketchMessage {
   main: string;
   /** The run that produced this sketch, when a primary output ran it first. */
   runId?: string;
+  parameterRun?: string;
 }
 
 export interface RunMessage {
@@ -59,6 +67,7 @@ export interface RunMessage {
   id: string;
   setup: string;
   main: string;
+  parameterRun?: string;
 }
 
 export interface ResultMessage {
@@ -66,6 +75,13 @@ export interface ResultMessage {
   id: string;
   success: boolean;
   message?: string;
+  parameters?: NonNullable<ReturnType<typeof normalizeParameter>>[];
+}
+
+export interface ParametersMessage {
+  type: "parameters";
+  parameterRun: string;
+  values: [string, number][];
 }
 
 export interface StateMessage {
@@ -132,6 +148,7 @@ export type IncomingMessage =
   | HelloMessage
   | SketchMessage
   | StateMessage
+  | ParametersMessage
   | OverlayMessage
   | EditorMessage
   | SlotsMessage
@@ -162,6 +179,7 @@ export interface OutputErrorMessage {
 export type OutgoingMessage =
   | SketchMessage
   | StateMessage
+  | ParametersMessage
   | OverlayMessage
   | EditorMessage
   | SlotsMessage
@@ -273,12 +291,15 @@ export function parseIncomingMessage(raw: unknown): IncomingMessage | null {
       if (!code) return null;
       const sketch: SketchMessage = { type: "sketch", ...code };
       if (isRunId(message.runId)) sketch.runId = message.runId;
+      if (isRunId(message.parameterRun)) sketch.parameterRun = message.parameterRun;
       return sketch;
     }
     case "run": {
       const code = parseCode(message);
       if (!code || !isRunId(message.id)) return null;
-      return { type: "run", id: message.id, ...code };
+      const run: RunMessage = { type: "run", id: message.id, ...code };
+      if (isRunId(message.parameterRun)) run.parameterRun = message.parameterRun;
+      return run;
     }
     case "result": {
       if (!isRunId(message.id) || typeof message.success !== "boolean") return null;
@@ -286,7 +307,30 @@ export function parseIncomingMessage(raw: unknown): IncomingMessage | null {
       if (typeof message.message === "string") {
         result.message = message.message.slice(0, MAX_ERROR_LENGTH);
       }
+      if (result.success && Array.isArray(message.parameters)) {
+        result.parameters = message.parameters.slice(0, MAX_PARAMETERS).flatMap((entry) => {
+          const definition = normalizeParameter(entry);
+          return definition ? [definition] : [];
+        });
+      }
       return result;
+    }
+    case "parameters": {
+      if (!isRunId(message.parameterRun) || !Array.isArray(message.values)) return null;
+      const values: ParametersMessage["values"] = [];
+      for (const entry of message.values.slice(0, MAX_PARAMETERS)) {
+        if (!Array.isArray(entry)) continue;
+        const [name, value] = entry;
+        if (
+          typeof name === "string" &&
+          name.length <= MAX_PARAMETER_NAME &&
+          isFiniteNumber(value)
+        ) {
+          values.push([name, value]);
+        }
+      }
+      if (!values.length) return null;
+      return { type: "parameters", parameterRun: message.parameterRun, values };
     }
     case "state": {
       const state: StateMessage = { type: "state" };
@@ -357,6 +401,7 @@ export function createOutputHub({ log = () => {} }: OutputHubOptions = {}) {
   const clients = new Map<string, HubClient>();
   let lastSketch: SketchMessage | null = null;
   let lastState: StateMessage | null = null;
+  let lastParameters: ParametersMessage | null = null;
   let lastOverlay: OverlayMessage | null = null;
   let lastEditor: EditorMessage | null = null;
   let lastSlots: SlotsMessage | null = null;
@@ -470,6 +515,7 @@ export function createOutputHub({ log = () => {} }: OutputHubOptions = {}) {
             if (client.primary) client.hasSketch = true;
           }
           if (lastState) deliver(client, lastState);
+          if (lastParameters) deliver(client, lastParameters);
           if (lastOverlay) deliver(client, lastOverlay);
           if (lastEditor) deliver(client, lastEditor);
           if (lastSlots) deliver(client, lastSlots);
@@ -481,6 +527,7 @@ export function createOutputHub({ log = () => {} }: OutputHubOptions = {}) {
         return true;
       case "sketch":
         if (client.role !== "controller") return false;
+        if (parsed.parameterRun !== lastSketch?.parameterRun) lastParameters = null;
         lastSketch = parsed;
         broadcast("output", parsed);
         if (markHasSketch(primaryOutputs())) announceOutputs();
@@ -512,6 +559,13 @@ export function createOutputHub({ log = () => {} }: OutputHubOptions = {}) {
         if (controller) deliver(controller, parsed);
         return true;
       }
+      case "parameters":
+        if (client.role !== "controller" || parsed.parameterRun !== lastSketch?.parameterRun) {
+          return false;
+        }
+        lastParameters = parsed;
+        broadcast("output", parsed);
+        return true;
       case "state":
         if (client.role !== "controller") return false;
         lastState = { ...(lastState ?? { type: "state" }), ...parsed };

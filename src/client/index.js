@@ -1,6 +1,6 @@
 import { createDocPanel } from "../DocPanel.js";
 import { createMidiManager } from "../MidiManager.js";
-import { createSlotsPanel } from "../SlotsPanel.js";
+import { createSlotParameterStorage, createSlotsPanel } from "../SlotsPanel.js";
 // Import utilities
 import { createStatsPanel } from "../StatsPanel.js";
 import { VERSION } from "../project.js";
@@ -15,8 +15,9 @@ import { createSafeStorage } from "./core/Storage.js";
 import { createAudioInputs } from "./core/audioInput.js";
 import { createEditorTabs } from "./core/editorTabs.js";
 import { notify, notifyError } from "./core/notify.js";
+import { createParameterMappings } from "./core/parameterMappings.js";
 import { createRenderLoop } from "./core/renderLoop.js";
-import { executeSketch } from "./core/sketchRunner.js";
+import { applySketchParameters, executeSketch } from "./core/sketchRunner.js";
 import { nextUiAction } from "./core/uiCycle.js";
 import { createAudioInputPlugin } from "./plugins/AudioInputPlugin.js";
 import { createAudioWatchdogPlugin } from "./plugins/AudioWatchdogPlugin.js";
@@ -42,6 +43,20 @@ const storage = createSafeStorage({
   },
 });
 const events = createEventBus();
+const runPrefix = Math.random().toString(36).slice(2);
+let parameterRunCount = 0;
+const parameters = createParameterMappings({
+  ...createSlotParameterStorage(storage),
+  onChange: (state) => {
+    if (window.mainHydra) applySketchParameters(window.mainHydra, state);
+    if (window.breakoutHydra) applySketchParameters(window.breakoutHydra, state);
+    events.emit("sketch:parameters", state);
+  },
+});
+
+function nextParameterRun() {
+  return `${runPrefix}-${++parameterRunCount}`;
+}
 
 // The audio input a.fft listens to, for every hydra instance on this page
 // (the breakout window's too); the outputs follow through `audio:input`
@@ -70,6 +85,7 @@ const DEFAULT_CODE = sketchSource(SKETCHES[0]);
 // desktop app runs them on its Syphon/Spout output and shows that output's
 // frames); null runs them on the main instance itself
 let mainSketchRunner = null;
+let mainRuns = Promise.resolve();
 
 // The last sketch that ran on the main instance, { setup, main }
 let runningSketch = null;
@@ -319,7 +335,12 @@ function showErrorNotification(errorMessage) {
 }
 
 // Run hydra code with setup support
-async function runCode(editor, hydra) {
+async function runCode(
+  editor,
+  hydra,
+  slot = window.slotsPanel?.getEditorSlot(),
+  includeBreakout = false,
+) {
   try {
     // Get code from editor - check if it has tab support
     let setupCode = "";
@@ -339,24 +360,41 @@ async function runCode(editor, hydra) {
     existingErrors.forEach((el) => el.remove());
 
     // Shared with the output page so every render head runs sketches identically
-    const sketch = { setup: setupCode, main: mainCode };
-    const runner = hydra === window.mainHydra ? mainSketchRunner : null;
-    const result = runner ? await runner(sketch) : await executeSketch(hydra, sketch);
-
-    // Check if there was an error
-    if (!result.success) {
-      showErrorNotification(result.message);
-      return false;
+    const isMain = hydra === window.mainHydra;
+    const sameSketch = runningSketch?.setup === setupCode && runningSketch?.main === mainCode;
+    const sketch = {
+      setup: setupCode,
+      main: mainCode,
+      parameterRun: !isMain && sameSketch ? runningSketch.parameterRun : nextParameterRun(),
+    };
+    if (!isMain) {
+      const result = await executeSketch(hydra, sketch);
+      if (!result.success) throw new Error(result.message);
+      applySketchParameters(hydra, parameters.snapshot(), true);
+      return true;
     }
 
-    console.log("Hydra code executed successfully");
+    // Capture the code and slot before queuing, since a later recall may edit
+    // the editor while this sketch is awaiting media or a desktop response.
+    const run = mainRuns.then(async () => {
+      const result = mainSketchRunner
+        ? await mainSketchRunner(sketch)
+        : await executeSketch(hydra, sketch);
+      if (!result.success) throw new Error(result.message);
 
-    // Let plugins react to a successful run on the main instance
-    // (the output-sync plugin mirrors it to external render heads)
-    if (hydra === window.mainHydra) {
-      runningSketch = sketch;
-      events.emit("sketch:run", result.runId ? { ...sketch, runId: result.runId } : sketch);
-    }
+      runningSketch = result.runId ? { ...sketch, runId: result.runId } : sketch;
+      parameters.activate(sketch.parameterRun, slot, result.parameters);
+      events.emit("sketch:run", runningSketch);
+
+      const breakout = window.breakoutHydra;
+      if (includeBreakout && breakout && !window.breakoutWindow?.closed) {
+        const breakoutResult = await executeSketch(breakout, sketch);
+        if (breakoutResult.success) applySketchParameters(breakout, parameters.snapshot(), true);
+        else showErrorNotification(breakoutResult.message);
+      }
+    });
+    mainRuns = run.catch(() => {});
+    await run;
     return true;
   } catch (error) {
     console.error("Error running Hydra code:", error);
@@ -537,20 +575,8 @@ async function importDefaultScenesIfEmpty() {
 }
 
 // Run Hydra code on both main and breakout windows
-async function runCodeOnAllInstances(editor, mainHydra) {
-  // Run on main Hydra instance
-  const success = await runCode(editor, mainHydra);
-
-  // If breakout window is active, run the same code there
-  if (window.breakoutHydra && window.breakoutWindow && !window.breakoutWindow.closed) {
-    try {
-      await runCode(editor, window.breakoutHydra);
-    } catch (error) {
-      console.error("Error running Hydra code in breakout window:", error);
-    }
-  }
-
-  return success;
+function runCodeOnAllInstances(editor, mainHydra, slot) {
+  return runCode(editor, mainHydra, slot, true);
 }
 
 // Initialize the application
@@ -713,7 +739,14 @@ async function init() {
         }
       }
 
-      if (e.altKey && window.slotsPanel && (e.code === "ArrowLeft" || e.code === "ArrowRight")) {
+      if (
+        e.altKey &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.shiftKey &&
+        window.slotsPanel &&
+        (e.code === "ArrowLeft" || e.code === "ArrowRight")
+      ) {
         e.preventDefault();
         window.slotsPanel.cycleBank(e.code === "ArrowLeft" ? -1 : 1);
         window.flashActiveBankDot?.(window.slotsPanel.getBank());
@@ -773,7 +806,7 @@ async function init() {
     await importDefaultScenesIfEmpty();
 
     // Create the slots panel (always shown, but positioned differently on mobile)
-    const slotsPanel = createSlotsPanel(editor, hydra, runCode, isMobile, {
+    const slotsPanel = createSlotsPanel(editor, hydra, runCodeOnAllInstances, isMobile, {
       // Don't let slot 0 overwrite a sketch that was loaded from the URL
       keepEditorContent: urlSketch !== null,
       // For the code overlay's scenes and slots indicator
@@ -782,7 +815,7 @@ async function init() {
 
     if (!isMobile) {
       // Initialize MIDI support with the slots panel (desktop only)
-      midiManager = createMidiManager(slotsPanel);
+      midiManager = createMidiManager(slotsPanel, { storage, parameters });
 
       // Create XY pad panel (desktop only)
       import("./../XYPadPanel.js").then((module) => {
@@ -843,6 +876,7 @@ async function init() {
       },
       // The last sketch that ran on the main instance, { setup, main }, or null
       getRunningSketch: () => (runningSketch ? { ...runningSketch } : null),
+      getSketchParameters: parameters.snapshot,
       // Add a step to Ctrl/⌘+` while the UI is hidden: the first press after
       // hiding calls step() instead of bringing the UI back; null removes it
       setUiCycleStep: (step) => {

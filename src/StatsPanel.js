@@ -159,18 +159,6 @@ export function createStatsPanel({ midi = true, breakout = true } = {}) {
   midiButtonsContainer.style.gap = "4px";
   midiButtonsContainer.style.marginTop = "2px";
 
-  // Create MIDI learn button
-  const midiLearnButton = document.createElement("button");
-  midiLearnButton.className = "midi-learn-button";
-  midiLearnButton.style.backgroundColor = "var(--color-bg-tertiary)";
-  midiLearnButton.style.border = "none";
-  midiLearnButton.style.borderRadius = "4px";
-  midiLearnButton.style.padding = "2px 8px";
-  midiLearnButton.style.color = "var(--color-text-primary)";
-  midiLearnButton.style.cursor = "pointer";
-  midiLearnButton.style.fontSize = "11px";
-  midiLearnButton.textContent = "MIDI Learn";
-
   // Create XY pad toggle button
   const xyPadButton = document.createElement("button");
   xyPadButton.className = "xy-pad-button";
@@ -200,42 +188,6 @@ export function createStatsPanel({ midi = true, breakout = true } = {}) {
     xyPadButton.textContent = newVisible ? "Hide XY Pad" : "Show XY Pad";
   });
 
-  // Create MIDI mapping display
-  const midiMappingDisplay = document.createElement("div");
-  midiMappingDisplay.className = "midi-mapping-display";
-  midiMappingDisplay.style.fontSize = "11px";
-  midiMappingDisplay.style.color = "var(--color-text-secondary)";
-  midiMappingDisplay.style.marginTop = "4px";
-  midiMappingDisplay.style.display = "none";
-
-  // Add click handler for MIDI learn
-  midiLearnButton.addEventListener("click", () => {
-    if (window.midiManager.isLearning()) {
-      window.midiManager.cancelLearnMode();
-      midiLearnButton.textContent = "MIDI Learn";
-      midiMappingDisplay.style.display = "none";
-    } else {
-      midiMappingDisplay.style.display = "block";
-      midiMappingDisplay.textContent = "Click a slot, then press a pad to map it...";
-      midiLearnButton.textContent = "Cancel Learn";
-
-      // Start MIDI learn mode
-      window.midiManager.startLearnMode((note) => {
-        const activeSlot = window.slotsPanel.getActiveSlotIndex();
-        if (activeSlot !== null) {
-          window.midiManager.updateMapping(note, activeSlot);
-          midiMappingDisplay.textContent = `Mapped pad ${note} to slot ${activeSlot + 1}`;
-          setTimeout(() => {
-            midiMappingDisplay.style.display = "none";
-          }, 2000);
-        }
-        midiLearnButton.textContent = "MIDI Learn";
-      });
-    }
-  });
-
-  // Add buttons to container
-  if (midi) midiButtonsContainer.appendChild(midiLearnButton);
   midiButtonsContainer.appendChild(xyPadButton);
 
   // Add to MIDI section; without MIDI only the XY pad button is left
@@ -246,7 +198,6 @@ export function createStatsPanel({ midi = true, breakout = true } = {}) {
     midiButtonsContainer.style.marginTop = "0";
   }
   midiSection.appendChild(midiButtonsContainer);
-  if (midi) midiSection.appendChild(midiMappingDisplay);
 
   // Audio input section: the AudioInputPlugin fills and wires these controls
   const audioInputSection = document.createElement("div");

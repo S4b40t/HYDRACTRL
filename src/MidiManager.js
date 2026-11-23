@@ -37,7 +37,7 @@ export function sceneForNote(mapping, currentScene, note) {
   return -1;
 }
 
-export function createMidiManager(slotsPanel, { storage = createSafeStorage() } = {}) {
+export function createMidiManager(slotsPanel, { storage = createSafeStorage(), parameters } = {}) {
   let isNanoPad = false;
   let midiAccess = null;
   let activeDevice = null;
@@ -74,13 +74,30 @@ export function createMidiManager(slotsPanel, { storage = createSafeStorage() } 
         (other) => other !== action && controlKey(navigation[other]) === controlKey(binding),
       );
     if (conflict) return `Already assigned to ${NAVIGATION_ACTIONS[conflict]}.`;
+    if (binding && parameters?.isMapped(binding)) {
+      return "Already assigned to a parameter in the running sketch.";
+    }
     const next = { ...navigation };
     if (binding) next[action] = binding;
     else delete next[action];
     if (!storage.setJSON(profileKey(activeDevice), next)) return "Could not save the profile.";
     navigation = next;
     navigationControls.reset();
+    if (binding?.mode === "toggle") {
+      // The learned high value came from a previous physical toggle press.
+      if (suppressed.delete(controlKey(binding))) {
+        navigationControls.buttonPressed(binding, { ...binding, value: 127 });
+      }
+    }
     return null;
+  }
+
+  function parameterConflict(binding) {
+    if (reservedControl(binding)) return "Reserved for the nanoPAD2.";
+    const action = Object.keys(navigation).find(
+      (name) => controlKey(navigation[name]) === controlKey(binding),
+    );
+    return action ? `Reserved for ${NAVIGATION_ACTIONS[action]}.` : null;
   }
 
   // Initialize global XY pad values
@@ -165,6 +182,7 @@ export function createMidiManager(slotsPanel, { storage = createSafeStorage() } 
       currentScene = slotsPanel?.getBank?.() ?? 0;
       navigation = device ? normalizeNavigationProfile(storage.getJSON(profileKey(device))) : {};
       navigationControls.reset();
+      parameters?.resetPickup();
       suppressed.clear();
       controlLearn = null;
       isLearning = false;
@@ -209,7 +227,10 @@ export function createMidiManager(slotsPanel, { storage = createSafeStorage() } 
   function onMIDIMessage(message) {
     const data = message.data;
     if (!data?.length) return;
+    const cmd = data[0] & 0xf0;
+    const channel = data[0] & 0x0f;
     const control = readMidiControl(data);
+    if (!control && [0x80, 0x90, 0xb0].includes(cmd)) return;
     if (control) {
       const key = controlKey(control);
       if (suppressed.has(key)) {
@@ -231,11 +252,9 @@ export function createMidiManager(slotsPanel, { storage = createSafeStorage() } 
           navigationControls.dispatch(action, navigation[action], control);
           return;
         }
+        if (parameters?.dispatch(control)) return;
       }
     }
-    const cmd = data[0] & 0xf0; // Command byte (top 4 bits)
-    const channel = data[0] & 0x0f; // Channel (bottom 4 bits)
-
     // Special guard for XY pad - block high frequency CC messages
     if (cmd === 0xb0) {
       // Control Change
@@ -292,7 +311,7 @@ export function createMidiManager(slotsPanel, { storage = createSafeStorage() } 
         break;
       case 0xb0:
         messageType = "Control Change";
-        if (isNanoPad && xyPadPanel && data[1] === 16 && data[2] === 0) {
+        if (xyPadPanel && data[1] === 16 && data[2] === 0) {
           xyPadPanel.handlePadRelease();
         }
         break;
@@ -354,6 +373,7 @@ export function createMidiManager(slotsPanel, { storage = createSafeStorage() } 
         // If in learn mode, call the learn callback
         if (isLearning && learnCallback) {
           isLearning = false;
+          suppressed.add(controlKey(control));
           learnCallback(note);
           learnCallback = null;
           return;
@@ -547,7 +567,19 @@ export function createMidiManager(slotsPanel, { storage = createSafeStorage() } 
         const parsed = JSON.parse(savedMapping);
         // Validate the mapping structure
         if (Array.isArray(parsed) && parsed.length === 4) {
-          return parsed;
+          return parsed.map((bank, index) =>
+            Array.isArray(bank)
+              ? bank.filter(
+                  (entry) =>
+                    Number.isInteger(entry?.note) &&
+                    entry.note >= 0 &&
+                    entry.note <= 127 &&
+                    Number.isInteger(entry.slot) &&
+                    entry.slot >= 0 &&
+                    entry.slot <= 15,
+                )
+              : structuredClone(defaultMidiMapping[index]),
+          );
         }
       }
     } catch (error) {
@@ -595,7 +627,8 @@ export function createMidiManager(slotsPanel, { storage = createSafeStorage() } 
     }
 
     console.debug(`MIDI note ${note} maps to slot ${mapping.slot}`);
-    slotsPanel.setActiveSlot(mapping.slot);
+    if (slotsPanel.getBank?.() === scene) slotsPanel.setActiveSlot(mapping.slot);
+    else slotsPanel.switchBank(scene, mapping.slot);
   }
 
   // Handle generic MIDI notes for other controllers
@@ -656,6 +689,17 @@ export function createMidiManager(slotsPanel, { storage = createSafeStorage() } 
         isActive: activeDevice === input,
       })),
     getNavigation: () => structuredClone(navigation),
+    getParameterMappings: () =>
+      parameters?.rows().map((row) => ({
+        ...row,
+        conflict: row.binding && parameterConflict(row.binding),
+      })) ?? [],
+    getParameterSlot: () => parameters?.getSlot(),
+    assignParameter: (name, binding) => {
+      if (!activeDevice || !parameters) return "Select a MIDI input first.";
+      return (binding && parameterConflict(binding)) || parameters.assign(name, binding);
+    },
+
     assignNavigation,
     resetNavigation: () => {
       if (!activeDevice || !storage.remove(profileKey(activeDevice))) return false;

@@ -9,6 +9,22 @@
  * caller (toast on the UI, console + relay on an output).
  */
 
+import { createSketchParameters } from "./sketchParameters.js";
+
+const runningParameters = new WeakMap();
+
+export function applySketchParameters(hydra, state, immediate = false) {
+  const active = runningParameters.get(hydra);
+  if (!active || !state || active.run !== state.parameterRun) return false;
+  active.registry.apply(state.values, immediate);
+  return true;
+}
+
+export function readSketchParameters(hydra) {
+  const active = runningParameters.get(hydra);
+  return active ? { parameterRun: active.run, values: active.registry.values() } : null;
+}
+
 const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
 
 /** Join setup and main code the way the editor tabs expect: setup first, then main. */
@@ -54,6 +70,7 @@ function pauseDroppedVideos(previous, hydra) {
 function buildSketchFunction(code) {
   return new AsyncFunction(
     "hydra",
+    "midiParam",
     `
       // Set global h variable to hydra for convenience
       globalThis.h = hydra;
@@ -101,9 +118,11 @@ export function checkSketchSyntax({ setup = "", main = "" } = {}) {
  * @param {{setup?: string, main?: string}} sketch
  * @returns {Promise<{success: true} | {success: false, message: string, error?: unknown}>}
  */
-export async function executeSketch(hydra, { setup = "", main = "" } = {}) {
+export async function executeSketch(hydra, { setup = "", main = "", parameterRun } = {}) {
+  const registry = createSketchParameters();
   const previousVideos = sourceVideos(hydra);
   try {
+    runningParameters.delete(hydra);
     // Reset all outputs so leftovers from the previous sketch don't linger
     hydra.hush();
 
@@ -112,8 +131,13 @@ export async function executeSketch(hydra, { setup = "", main = "" } = {}) {
     // A syntax error in the sketch throws here, at construction time
     const fn = buildSketchFunction(code);
 
-    const result = await fn(hydra);
-    if (result && result.success) return { success: true };
+    const result = await fn(hydra, registry.register);
+    if (result?.success) {
+      const parameters = registry.definitions();
+      if (!parameters.length) return { success: true };
+      runningParameters.set(hydra, { run: parameterRun, registry });
+      return { success: true, parameters };
+    }
     return {
       success: false,
       error: result?.error,
@@ -127,6 +151,7 @@ export async function executeSketch(hydra, { setup = "", main = "" } = {}) {
       message: (error && error.message) || "Failed to execute Hydra code",
     };
   } finally {
+    registry.seal();
     pauseDroppedVideos(previousVideos, hydra);
   }
 }

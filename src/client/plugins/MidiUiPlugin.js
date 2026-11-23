@@ -35,12 +35,15 @@ export function createMidiUiPlugin() {
       const summary = document.createElement("summary");
       summary.textContent = "MIDI mappings";
       const form = document.createElement("div");
+      form.style.maxHeight = "min(40vh, 360px)";
+      form.style.overflowY = "auto";
       const feedback = document.createElement("div");
       feedback.setAttribute("role", "status");
       feedback.style.padding = "4px 0";
 
       function cancelLearn() {
         manager.cancelControlLearn();
+        if (manager.isLearning()) manager.cancelLearnMode();
         feedback.textContent = "";
       }
 
@@ -86,6 +89,36 @@ export function createMidiUiPlugin() {
         return row;
       }
 
+      function renderParameters() {
+        const title = document.createElement("div");
+        const slot = manager.getParameterSlot();
+        const rows = manager.getParameterMappings();
+        title.textContent = slot
+          ? `Sketch parameters · Bank ${slot.bank + 1} / Slot ${slot.slot + 1}`
+          : "Sketch parameters";
+        title.style.marginTop = "8px";
+        form.append(title);
+        if (!rows.length || !slot) {
+          const message = document.createElement("div");
+          message.textContent = rows.length
+            ? "Save the running sketch to a slot to assign its parameters."
+            : "The running sketch has no MIDI parameters.";
+          form.append(message);
+          return;
+        }
+        for (const { name, binding, conflict } of rows) {
+          const row = mappingRow(name, binding, true, (next) =>
+            manager.assignParameter(name, next),
+          );
+          if (conflict) {
+            const message = document.createElement("div");
+            message.textContent = conflict;
+            row.append(message);
+          }
+          form.append(row);
+        }
+      }
+
       function renderMappings() {
         form.replaceChildren();
         if (!manager.getActiveDevice()) return;
@@ -109,6 +142,15 @@ export function createMidiUiPlugin() {
         if (manager.getActiveDevice().name?.toLowerCase().includes("nanopad")) {
           form.append(
             button("Sync Scene ⟷ Bank", () => manager.setScene(ctx.getPanels().slots.getBank())),
+            button("Learn pad for active slot", () => {
+              cancelLearn();
+              feedback.textContent = "Press the nanoPAD2 pad for the active slot.";
+              manager.startLearnMode((note) => {
+                const slot = ctx.getPanels().slots.getActiveSlotIndex();
+                manager.updateMapping(note, slot);
+                feedback.textContent = `Assigned pad note ${note} to slot ${slot + 1}.`;
+              });
+            }),
             button("Show pad notes", () => {
               const bank = manager.getCurrentScene();
               const notes = manager.getMidiMapping()[bank].sort((a, b) => a.slot - b.slot);
@@ -121,6 +163,7 @@ export function createMidiUiPlugin() {
             }),
           );
         }
+        renderParameters();
       }
 
       function updateDeviceList() {
@@ -153,11 +196,16 @@ export function createMidiUiPlugin() {
       midi.deviceContainer.append(deviceSelect, config);
       window.updateMidiDeviceList = updateDeviceList;
       updateDeviceList();
+      const offRun = ctx.events.on("sketch:run", () => {
+        cancelLearn();
+        renderMappings();
+      });
 
       return {
         api: { updateDeviceList },
         dispose() {
           cancelLearn();
+          offRun();
           deviceSelect.remove();
           config.remove();
           if (window.updateMidiDeviceList === updateDeviceList) {

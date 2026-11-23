@@ -498,3 +498,27 @@ describe("primary outputs", () => {
     expect(controller.filter((m) => m.type === "result")).toHaveLength(0);
   });
 });
+
+test("parameter values follow the matching sketch to live and late outputs", () => {
+  const hub = createOutputHub();
+  const live: unknown[] = [];
+  const late: unknown[] = [];
+  hub.connect("controller", () => {});
+  hub.connect("live", (raw) => live.push(JSON.parse(raw)));
+  hub.message("controller", { type: "hello", role: "controller" });
+  hub.message("live", { type: "hello", role: "output" });
+  const sketch = { type: "sketch", setup: "", main: "osc().out()", parameterRun: "one" };
+  hub.message("controller", sketch);
+  const update = { type: "parameters", parameterRun: "one", values: [["Depth", 0.75]] };
+  expect(hub.message("controller", update)).toBe(true);
+  expect(live).toEqual([sketch, update]);
+  hub.connect("late", (raw) => late.push(JSON.parse(raw)));
+  hub.message("late", { type: "hello", role: "output" });
+  expect(late).toEqual([sketch, update]);
+  hub.message("controller", { ...sketch, parameterRun: "two" });
+  expect(hub.message("controller", update)).toBe(false);
+  expect(hub.message("live", { ...update, parameterRun: "two" })).toBe(false);
+  expect(
+    parseIncomingMessage({ ...update, values: [["bad", Number.POSITIVE_INFINITY]] }),
+  ).toBeNull();
+});

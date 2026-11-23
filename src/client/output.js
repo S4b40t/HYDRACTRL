@@ -29,7 +29,7 @@ import {
 } from "./core/editorSnapshot.js";
 import { buildOutputSocketUrl, detectOutputServer } from "./core/outputProtocol.js";
 import { createPrimaryRunner } from "./core/primaryRunner.js";
-import { executeSketch } from "./core/sketchRunner.js";
+import { applySketchParameters, executeSketch, readSketchParameters } from "./core/sketchRunner.js";
 import { readSketchFromHash } from "./plugins/UrlSharePlugin.js";
 
 // hydra-synth expects a Node-style global
@@ -113,6 +113,14 @@ async function init() {
     let overlaySettings = normalizeCodeOverlay(null);
     // Until the interface sends the editor, the overlay shows the code that runs here
     let followsEditor = false;
+    let parameterState = null;
+    let outputRuns = Promise.resolve();
+
+    function queueRun(task) {
+      outputRuns = outputRuns.then(task).catch((error) => {
+        console.error("[output] could not run sketch:", error);
+      });
+    }
 
     function applyOverlay(message) {
       overlaySettings = normalizeCodeOverlay(message, overlaySettings);
@@ -130,12 +138,19 @@ async function init() {
 
     /** A sketch sent to every output; `runId` names the interface's run it came from. */
     async function run(sketch, runId) {
+      if (
+        sketch.parameterRun &&
+        readSketchParameters(hydra)?.parameterRun === sketch.parameterRun
+      ) {
+        return { success: true, skipped: true };
+      }
       const result = primaryRunner
         ? await primaryRunner.runSketch(sketch, { runId })
         : await executeSketch(hydra, sketch);
       if (result.skipped) return result;
       if (result.success) {
         showRunning(sketch);
+        applySketchParameters(hydra, parameterState, true);
       } else {
         console.error("[output] sketch failed:", result.message);
         if (socket) socket.send({ type: "error", message: result.message });
@@ -145,7 +160,11 @@ async function init() {
 
     /** A run for this output alone (primary only): the interface waits for its result. */
     async function runForInterface(message) {
-      const sketch = { setup: message.setup, main: message.main };
+      const sketch = {
+        setup: message.setup,
+        main: message.main,
+        parameterRun: message.parameterRun,
+      };
       let result;
       try {
         result = await primaryRunner.run(message.id, sketch);
@@ -156,6 +175,7 @@ async function init() {
       else console.error("[output] sketch failed:", result.message);
       const reply = { type: "result", id: message.id, success: result.success };
       if (!result.success) reply.message = result.message;
+      if (result.parameters) reply.parameters = result.parameters;
       socket?.send(reply);
     }
 
@@ -174,9 +194,12 @@ async function init() {
       },
       onMessage: (message) => {
         if (message.type === "sketch") {
-          run({ setup: message.setup, main: message.main }, message.runId);
+          queueRun(() => run(message, message.runId));
         } else if (message.type === "run" && primaryRunner) {
-          runForInterface(message);
+          queueRun(() => runForInterface(message));
+        } else if (message.type === "parameters") {
+          parameterState = message;
+          applySketchParameters(hydra, message);
         } else if (message.type === "state") {
           if (typeof message.nanoX === "number") window.nanoX = message.nanoX;
           if (typeof message.nanoY === "number") window.nanoY = message.nanoY;

@@ -66,7 +66,7 @@ export function createMyPlugin() {
 | `runCode()` | Run the current editor code on the main and breakout instances. |
 | `runCodeOn(instance)` | Run the current editor code on one specific hydra instance only. |
 | `renderLoop` | The main instance's animation loop: `stop()`, `start()`, `isRunning()`. |
-| `getRunningSketch()` | The last sketch that ran on the main instance, `{ setup, main }`, or `null`. |
+| `getRunningSketch()` | The last sketch that ran on the main instance, `{ setup, main, parameterRun, runId? }`, or `null`. |
 | `setUiCycleStep(step)` | Add a step to Ctrl/⌘+` while the UI is hidden: the first press after hiding calls `step()` instead of bringing the UI back (the code overlay plugin switches the code with it). `null` removes it. |
 | `setSketchRunner(runner)` | Run the main instance's sketches somewhere else: `runner({ setup, main })` resolves to `{ success, message?, runId? }`. `null` runs them on the main instance again. The desktop mirror plugin uses it. |
 | `audioInputs` | The audio input `a.fft` listens to (see `src/client/core/audioInput.js`): `list()` resolves to `{ inputs: [{ deviceId, label }], defaultLabel }`, `choose(input)` listens to one (`null` for the system default) and resolves to `getState()`, which is `{ choice, device, missing, listening, error }`. `attach(create)` creates another hydra instance that follows the choice. |
@@ -74,6 +74,7 @@ export function createMyPlugin() {
 | `storage` | Quota-safe localStorage wrapper: `get`, `set`, `remove`, `getJSON`, `setJSON`, `keys(prefix)`. Never throws. |
 | `notify(msg, {type, duration})` | Toast notifications (`type`: `"info"`, `"success"`, `"error"`). |
 | `isMobile` | `true` on phones, which get the mobile UI instead of the editor and panels; `false` on computers and tablets (see `isPhone()` in `src/utils/DeviceDetection.js`). |
+| `getSketchParameters()` | The running sketch's parameter targets, `{ parameterRun, values: [[name, value]] }`, or `null`. |
 | `midi` | `{ manager, supported }` — the MidiManager instance (or `undefined` on mobile) and whether Web MIDI initialized. |
 | `getPanels()` | Returns `{ stats, slots, doc, xyPad }` panel objects (may contain `undefined` on mobile; on tablets the stats panel has no `midi` or `display` section). |
 
@@ -98,7 +99,8 @@ export function createMyPlugin() {
 | `slots:advanced` | `{ bank, slot }` | The active slot moved after a save (slot advance plugin). |
 | `breakout:opened` / `breakout:closed` | `{ width, height }` / `{}` | Breakout window lifecycle. |
 | `feedback:open` | — | Emit it to open the feedback panel (the About panel's "Send feedback" does). |
-| `sketch:run` | `{ setup, main, runId? }` | A sketch ran successfully on the main hydra instance (any trigger: run button, shortcut, auto-run, slot load). `runId` is set when the desktop app's output ran it (desktop mirror plugin). |
+| `sketch:run` | `{ setup, main, parameterRun, runId? }` | A sketch ran successfully on the main hydra instance (any trigger: run button, shortcut, auto-run, slot load). `runId` is set when the desktop app's output ran it (desktop mirror plugin). |
+| `sketch:parameters` | `{ parameterRun, values: [[name, value]] }` | Targets changed for the running sketch. |
 | `mirror:changed` | `{ active }` | The desktop app's interface switched to showing the output's own frames (`true`) or back to rendering itself (desktop mirror plugin). |
 | `output:count` | `{ count }` | The number of connected external outputs changed (output sync plugin). |
 | `media:added` | `{ files: [{ name, kind, url, source }] }` | Files dropped on the editor were added to the sketch, `kind` is `"image"` or `"video"` and `source` the number of the source they load into (desktop media plugin). |
