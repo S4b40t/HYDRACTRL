@@ -20,7 +20,31 @@ function profileKey(device) {
   return PROFILE_PREFIX + device.id;
 }
 
-// MIDI device state
+function deviceIdentity(device) {
+  const name = device.name?.trim().toLowerCase();
+  const manufacturer = device.manufacturer?.trim().toLowerCase();
+  return name && manufacturer ? JSON.stringify([manufacturer, name]) : null;
+}
+
+export function findMidiInput(inputs, preference, allowChangedId = false) {
+  const exact = inputs.find(({ id }) => id === preference.id);
+  if (exact || !allowChangedId || !preference.identity) return exact;
+  const matches = inputs.filter((input) => deviceIdentity(input) === preference.identity);
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function readPreference(storage) {
+  const raw = storage.get(PREFERENCE_KEY);
+  if (!raw) return { id: null };
+  if (!raw.startsWith("{")) return { id: raw };
+  try {
+    const record = JSON.parse(raw);
+    return typeof record.id === "string" ? record : { id: null };
+  } catch {
+    return { id: null };
+  }
+}
+
 /**
  * The scene a pad's note belongs to: the current scene when its mapping has
  * the note, else the first scene whose mapping does, or -1 when none does.
@@ -44,7 +68,7 @@ export function createMidiManager(slotsPanel, { storage = createSafeStorage(), p
   let isConnected = false;
   let xyPadPanel = null;
   const xyPadValues = { x: 0, y: 0 };
-  let preferredId = storage.get(PREFERENCE_KEY);
+  let preference = readPreference(storage);
   let navigation = {};
   let controlLearn = null;
   let accessStatus = "Initializing…";
@@ -160,7 +184,7 @@ export function createMidiManager(slotsPanel, { storage = createSafeStorage(), p
     // Listen for connect/disconnect events
     midiAccess.onstatechange = onStateChange;
 
-    updateConnection();
+    updateConnection(true);
   }
 
   function availableDevices() {
@@ -169,11 +193,48 @@ export function createMidiManager(slotsPanel, { storage = createSafeStorage(), p
     );
   }
 
-  function updateConnection() {
+  function saveDevice(device, inputs, migrate = false) {
+    if (migrate && !storage.get(profileKey(device))) {
+      const previous = storage.get(profileKey(preference));
+      if (previous && !storage.set(profileKey(device), previous)) return false;
+    }
+    const identity = deviceIdentity(device);
+    const unambiguous =
+      identity && inputs.filter((input) => deviceIdentity(input) === identity).length === 1;
+    const next = { id: device.id, identity: unambiguous ? identity : null };
+    if (!storage.setJSON(PREFERENCE_KEY, next)) return false;
+    preference = next;
+    return true;
+  }
+
+  function selectDevice(id) {
     const inputs = availableDevices();
-    const device = preferredId
-      ? inputs.find((input) => input.id === preferredId)
+    if (id === null) {
+      if (!storage.remove(PREFERENCE_KEY)) return false;
+      preference = { id: null };
+    } else {
+      const device = inputs.find((input) => input.id === id);
+      if (!device) return false;
+      const replacement =
+        preference.id !== id && findMidiInput(inputs, preference, true) === device;
+      if (!saveDevice(device, inputs, replacement)) return false;
+    }
+    updateConnection();
+    return true;
+  }
+
+  function updateConnection(restore = false) {
+    const inputs = availableDevices();
+    let device = preference.id
+      ? findMidiInput(inputs, preference, restore)
       : (inputs.find((input) => input === activeDevice) ?? inputs[0]);
+    if (device && preference.id && restore) {
+      if (device.id !== preference.id) {
+        if (!saveDevice(device, inputs, true)) device = undefined;
+      } else if (preference.identity === undefined) {
+        saveDevice(device, inputs);
+      }
+    }
     if ((device ?? null) !== activeDevice) {
       if (activeDevice) activeDevice.onmidimessage = null;
       activeDevice = device ?? null;
@@ -196,7 +257,7 @@ export function createMidiManager(slotsPanel, { storage = createSafeStorage(), p
     }
     accessStatus = device
       ? device.name || "Unknown device"
-      : preferredId
+      : preference.id
         ? "Selected input unavailable"
         : "No devices found";
     refresh();
@@ -664,22 +725,11 @@ export function createMidiManager(slotsPanel, { storage = createSafeStorage(), p
       return false;
     },
     getAccessStatus: () => accessStatus,
-    getPreferredId: () => preferredId,
-    selectDevice: (id) => {
-      if (id !== null && !availableDevices().some((input) => input.id === id)) return false;
-      if (!(id === null ? storage.remove(PREFERENCE_KEY) : storage.set(PREFERENCE_KEY, id))) {
-        return false;
-      }
-      preferredId = id;
-      updateConnection();
-      return true;
-    },
+    getPreferredId: () => preference.id,
+    selectDevice,
     connectToDeviceByIndex: (index) => {
       const input = availableDevices()[index];
-      if (!input || !storage.set(PREFERENCE_KEY, input.id)) return false;
-      preferredId = input.id;
-      updateConnection();
-      return true;
+      return input ? selectDevice(input.id) : false;
     },
     listDevices: () =>
       availableDevices().map((input) => ({

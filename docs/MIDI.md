@@ -2,7 +2,10 @@
 
 Expand **System**, select a MIDI input, and open **MIDI mappings**. The selected
 input and its navigation profile are saved in HYDRACTRL. If a selected input
-disconnects, HYDRACTRL waits for it to return. Choose **Automatic MIDI input**
+disconnects, HYDRACTRL waits for it to return. At launch a changed MIDI port ID
+can be recovered when exactly one input matches the saved manufacturer and name.
+During a session, explicitly select the matching replacement to recover its
+profile after an ID change. Choose **Automatic MIDI input**
 to use an available device, or explicitly select the replacement input.
 
 ## Set up a UC-33 or another controller

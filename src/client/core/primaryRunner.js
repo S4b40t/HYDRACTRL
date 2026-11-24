@@ -33,6 +33,26 @@ function normalize(sketch) {
   return sketch?.parameterRun ? { ...code, parameterRun: sketch.parameterRun } : code;
 }
 
+/** Play a sketch, preserving the last successful render and MIDI targets on failure. */
+export async function runWithRecovery(
+  hydra,
+  sketch,
+  lastGood,
+  execute = executeSketch,
+  checkSyntax = checkSketchSyntax,
+) {
+  const syntaxError = checkSyntax(sketch);
+  if (syntaxError) return { success: false, message: syntaxError };
+  const previous = readSketchParameters(hydra);
+  const result = await execute(hydra, sketch);
+  if (result.success) return result;
+  if (lastGood) {
+    await execute(hydra, lastGood);
+    applySketchParameters(hydra, previous, true);
+  }
+  return { success: false, message: result.message || "Unknown error" };
+}
+
 export function createPrimaryRunner({
   hydra,
   execute = executeSketch,
@@ -54,20 +74,9 @@ export function createPrimaryRunner({
   }
 
   async function runGuarded(sketch) {
-    const syntaxError = checkSyntax(sketch);
-    if (syntaxError) return { success: false, message: syntaxError };
-    const previous = readSketchParameters(hydra);
-    const result = await execute(hydra, sketch);
-    if (result.success) {
-      lastGood = sketch;
-      return result;
-    }
-    // The failed run hushed the outputs: bring back what was playing
-    if (lastGood) {
-      await execute(hydra, lastGood);
-      applySketchParameters(hydra, previous, true);
-    }
-    return { success: false, message: result.message || "Unknown error" };
+    const result = await runWithRecovery(hydra, sketch, lastGood, execute, checkSyntax);
+    if (result.success) lastGood = sketch;
+    return result;
   }
 
   /** A sketch sent to every output; `runId` names the run it came from, if any. */

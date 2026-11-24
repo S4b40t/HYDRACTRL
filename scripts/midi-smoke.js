@@ -23,7 +23,13 @@ try {
       [
         ["generic", "Performance controller"],
         ["nano", "Korg nanoPAD2"],
-      ].map(([id, name]) => [id, { id, name, type: "input", state: "connected" }]),
+      ].map(([id, name]) => {
+        const currentId = id === "generic" ? localStorage.getItem("smoke-input-id") || id : id;
+        return [
+          currentId,
+          { id: currentId, name, manufacturer: "MIDI Test", type: "input", state: "connected" },
+        ];
+      }),
     );
     const access = { inputs };
     navigator.requestMIDIAccess = async () => access;
@@ -38,18 +44,18 @@ try {
       },
     };
     if (localStorage.getItem("smoke-ready")) return;
-    const slot = (bank, index, name) => {
+    const slot = (bank, index, name, definition = { default: 0.5, min: 0, max: 1 }) => {
       localStorage.setItem(
         `hydractrl-slot-bank-${bank}-slot-${index}`,
         `globalThis.midiRuns = (globalThis.midiRuns || 0) + 1;
          globalThis.midiScene = ${JSON.stringify(name)};
-         globalThis.midiValue = midiParam(${JSON.stringify(name)}, { default: 0.5, min: 0, max: 1, smoothing: 25 });
+         globalThis.midiValue = midiParam(${JSON.stringify(name)}, ${JSON.stringify({ ...definition, smoothing: 25 })});
          solid(midiValue, 0, 0).out();`,
       );
     };
     slot(0, 0, "First");
     slot(0, 15, "Last");
-    slot(1, 15, "Other");
+    slot(1, 15, "Other", { default: 3, min: 2, max: 4 });
     slot(2, 4, "Nano");
     localStorage.setItem(
       "hydractrl-midi-mapping",
@@ -58,7 +64,8 @@ try {
     localStorage.setItem("smoke-ready", "1");
   });
 
-  const send = (bytes, input = "generic") =>
+  let genericId = "generic";
+  const send = (bytes, input = genericId) =>
     page.evaluate(({ bytes, input }) => window.midiTest.send(input, bytes), { bytes, input });
   const scene = (target, name) =>
     target.waitForFunction((value) => window.midiScene === value, name);
@@ -100,6 +107,11 @@ try {
       `Pending slot ${slot + 1} · Bank 1`,
     );
   }
+  await page.evaluate(() => {
+    for (let index = 0; index < 1024; index++)
+      window.midiTest.send("generic", [0xb0, 21, index % 128]);
+  });
+  assert.equal(await page.evaluate(() => window.midiRuns), initialRuns);
   await send([0x90, 100, 90]);
   await send([0x90, 100, 90]);
   await send([0x80, 100, 0]);
@@ -120,15 +132,33 @@ try {
 
   await learn("Other · Unassigned", [0xb0, 31, 100]);
   await send([0xb0, 31, 127]);
-  assert.equal(await page.evaluate(() => window.midiValue()), 0.5);
+  assert.equal(await page.evaluate(() => window.midiValue()), 3);
   await send([0xb0, 31, 64]);
-  assert.equal(await page.evaluate(() => window.midiValue()), 0.5);
+  assert.equal(await page.evaluate(() => window.midiValue()), 3);
   await send([0xb0, 31, 95]);
-  const newValue = 95 / 127;
+  const newValue = 2 + 2 * (95 / 127);
   await page.waitForFunction((value) => window.midiValue() === value, newValue);
   await head.waitForFunction((value) => window.midiValue() === value, newValue);
   assert.equal(await page.evaluate(() => window.midiRuns), initialRuns + 1);
   assert.equal(await head.evaluate(() => window.midiRuns), initialOutputRuns + 1);
+
+  // A broken recall restores the playing sketch and its last MIDI target.
+  await page.evaluate(() => {
+    localStorage.setItem(
+      "hydractrl-slot-bank-1-slot-0",
+      'throw new Error("smoke runtime failure");',
+    );
+  });
+  await send([0xb0, 21, 0]);
+  await send([0xb0, 22, 127]);
+  await send([0xb0, 22, 0]);
+  await page.waitForFunction(() =>
+    document.querySelector(".error-notification")?.textContent.includes("smoke runtime failure"),
+  );
+  assert.equal(await page.evaluate(() => window.midiValue()), newValue);
+  assert.equal(await head.evaluate(() => window.midiValue()), newValue);
+  assert.equal(await head.evaluate(() => window.midiRuns), initialOutputRuns + 1);
+  await page.evaluate(() => localStorage.removeItem("hydractrl-slot-bank-1-slot-0"));
 
   const download = page.waitForEvent("download");
   await page.evaluate(() => window.slotsPanel.exportAllSlots());
@@ -148,11 +178,27 @@ try {
   await page.waitForFunction(() => localStorage.getItem("hydractrl-slot-bank-1-slot-15-midi"));
   await scene(page, "First");
 
+  // Old imports omit MIDI metadata. Replacing the slot also removes its old bindings.
+  const legacyChooser = page.waitForEvent("filechooser");
+  await page.evaluate(() => window.slotsPanel.importSlots());
+  const other = { ...bank.banks[1].slots[0] };
+  other.midi = undefined;
+  await (await legacyChooser).setFiles({
+    name: "legacy-bank.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({ version: 1, banks: [{ bankIndex: 1, slots: [other] }] })),
+  });
+  await page.waitForFunction(
+    () => localStorage.getItem("hydractrl-slot-bank-1-slot-15-midi") === null,
+  );
+
+  genericId = "generic-new-session";
+  await page.evaluate((id) => localStorage.setItem("smoke-input-id", id), genericId);
   await page.reload();
   await midiReady();
   await scene(page, "First");
   await openSystem();
-  assert.equal(await page.getByRole("combobox", { name: "MIDI input" }).inputValue(), "generic");
+  assert.equal(await page.getByRole("combobox", { name: "MIDI input" }).inputValue(), genericId);
   assert.equal(await page.evaluate(() => window.midiManager.getNavigation().slot.number), 21);
   assert.equal(
     await page.evaluate(() => window.midiManager.getParameterMappings()[0].binding.number),
@@ -161,11 +207,11 @@ try {
   await send([0x90, 63, 100]);
   await scene(page, "Last");
 
-  await page.evaluate(() => window.midiTest.connection("generic", "disconnected"));
+  await page.evaluate((id) => window.midiTest.connection(id, "disconnected"), genericId);
   await page.getByText("MIDI · Selected input unavailable", { exact: true }).waitFor();
   await send([0x90, 71, 100], "nano");
   assert.equal(await page.evaluate(() => window.midiScene), "Last");
-  await page.evaluate(() => window.midiTest.connection("generic", "connected"));
+  await page.evaluate((id) => window.midiTest.connection(id, "connected"), genericId);
   await page.getByText("MIDI · Performance controller", { exact: true }).waitFor();
   await send([0x90, 48, 100]);
   await scene(page, "First");

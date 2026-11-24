@@ -16,6 +16,7 @@ import { createAudioInputs } from "./core/audioInput.js";
 import { createEditorTabs } from "./core/editorTabs.js";
 import { notify, notifyError } from "./core/notify.js";
 import { createParameterMappings } from "./core/parameterMappings.js";
+import { runWithRecovery } from "./core/primaryRunner.js";
 import { createRenderLoop } from "./core/renderLoop.js";
 import { applySketchParameters, executeSketch } from "./core/sketchRunner.js";
 import { nextUiAction } from "./core/uiCycle.js";
@@ -379,7 +380,7 @@ async function runCode(
     const run = mainRuns.then(async () => {
       const result = mainSketchRunner
         ? await mainSketchRunner(sketch)
-        : await executeSketch(hydra, sketch);
+        : await runWithRecovery(hydra, sketch, runningSketch);
       if (!result.success) throw new Error(result.message);
 
       runningSketch = result.runId ? { ...sketch, runId: result.runId } : sketch;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { sceneForNote } from "./MidiManager.js";
+import { findMidiInput, sceneForNote } from "./MidiManager.js";
 import {
   createNavigationControls,
   normalizeNavigationProfile,
@@ -106,4 +106,16 @@ describe("configurable navigation", () => {
       }),
     ).toEqual({ slot: binding, previous: { type: "note", channel: 2, number: 88 } });
   });
+});
+
+test("restores a changed ID only when the saved manufacturer and name match uniquely", () => {
+  const replacement = { id: "new", name: "UC-33", manufacturer: "Evolution" };
+  const duplicate = { ...replacement, id: "duplicate" };
+  const exact = { ...replacement, id: "old" };
+  const preference = { id: "old", identity: JSON.stringify(["evolution", "uc-33"]) };
+  expect(findMidiInput([replacement, exact], preference, true)).toBe(exact);
+  expect(findMidiInput([replacement], preference)).toBeUndefined();
+  expect(findMidiInput([replacement], preference, true)).toBe(replacement);
+  expect(findMidiInput([replacement, duplicate], preference, true)).toBeUndefined();
+  expect(findMidiInput([replacement], { id: "old" }, true)).toBeUndefined();
 });
