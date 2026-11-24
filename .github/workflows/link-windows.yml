@@ -1,0 +1,42 @@
+name: Link Portable Windows validation
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/link-windows.yml
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Install locked dependencies and check sources
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          bun install --frozen-lockfile
+          bun run lint
+          bun test desktop/src/main/linkService.test.js desktop/src/main/linkIpc.test.js desktop/src/main/linkTiming.test.js src/client/core/linkClient.test.js
+          Push-Location desktop
+          bun install --frozen-lockfile
+          Pop-Location
+      - name: Compile MSVC x64 helper and test peer and package the app locally
+        run: ./desktop/scripts/build-link-portable.ps1 -SkipZip
+      - name: Exercise the installed helper and real Link SDK peer
+        working-directory: desktop
+        run: |
+          $env:HYDRACTRL_LINK_TEST_PEER = (Resolve-Path '.link-experiment-staging/native/Release/LinkTestPeer.exe').Path
+          node scripts/smoke.mjs --executable '.link-experiment-staging/app/win-unpacked/HYDRACTRL Link Experimental.exe' --software-gl --optional-output
