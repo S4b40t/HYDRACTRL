@@ -21,6 +21,7 @@ implementations:
 | `DesktopMirrorPlugin` | `desktop-mirror` | Inside the desktop app: shows the Syphon/Spout output's own frames instead of rendering every sketch a second time, and runs sketches on that output. No-op in a browser. |
 | `DesktopMediaPlugin` | `desktop-media` | Inside the desktop app: images and videos dropped on the editor go to the media folder, and the editor gets a line that loads each one into a free source. No-op in a browser. |
 | `MidiUiPlugin` | `midi-ui` | MIDI device list, status and mapping controls in the stats panel. |
+| `SignatureAssistPlugin` | `signature-assist` | Shows call signatures in Sketch and Setup, including registered Hydra transforms. |
 | `MobileUiPlugin` | `mobile-ui` | Phone UI: read-only code overlay, dice button, hides the editor. Tablets get the full interface. |
 
 `UrlSharePlugin` and `AudioWatchdogPlugin` are the simplest starting points;
@@ -63,6 +64,8 @@ export function createMyPlugin() {
 | --- | --- |
 | `hydra` | The main hydra-synth instance. |
 | `editor` | The editor proxy (`editor.state.doc.toString()` reads the code, `editor.dispatch({changes: {insert}})` replaces it, `editor.focus()`). |
+| `editor.addExtension(extension)` | Installs a CodeMirror 6 extension and returns an idempotent disposer. Use from a bundled plugin so the extension shares the editor’s CodeMirror modules. |
+| `editor.getCurrentTab()`, `editor.getTabCode(tab)` | Read the active tab ID (`main` or `setup`) and either tab’s current text, including unsaved edits. |
 | `runCode()` | Run the current editor code on the main and breakout instances. |
 | `runCodeOn(instance)` | Run the current editor code on one specific hydra instance only. |
 | `renderLoop` | The main instance's animation loop: `stop()`, `start()`, `isRunning()`. |

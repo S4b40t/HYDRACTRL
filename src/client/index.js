@@ -33,6 +33,7 @@ import { createInfoPanelPlugin } from "./plugins/InfoPanelPlugin.js";
 import { createMidiUiPlugin } from "./plugins/MidiUiPlugin.js";
 import { createMobileUiPlugin } from "./plugins/MobileUiPlugin.js";
 import { createOutputSyncPlugin } from "./plugins/OutputSyncPlugin.js";
+import { createSignatureAssistPlugin } from "./plugins/SignatureAssistPlugin.js";
 import { createSlotAdvancePlugin } from "./plugins/SlotAdvancePlugin.js";
 import { createUrlSharePlugin, readSketchFromHash } from "./plugins/UrlSharePlugin.js";
 
@@ -209,6 +210,9 @@ function initEditor() {
       }
     },
     focus: () => editor.focus(),
+    addExtension: editor.addExtension,
+    getCurrentTab: tabs.current,
+    getTabCode: tabs.getTabCode,
     // The code lights up to show it ran; the code overlay flashes with it
     flash: () => {
       editor.flash();
@@ -914,6 +918,7 @@ async function init() {
     pluginHost.register(createCodeOverlayPlugin());
     pluginHost.register(createMidiUiPlugin());
     pluginHost.register(createMobileUiPlugin());
+    pluginHost.register(createSignatureAssistPlugin());
     pluginHost.init();
 
     // Public extension point: external code (console, userscripts, future
