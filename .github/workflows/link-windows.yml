@@ -37,16 +37,26 @@ jobs:
           Pop-Location
       - name: Build the Windows x64 Portable ZIP locally
         run: ./desktop/scripts/build-link-portable.ps1
-      - name: Launch and close the companion peer window
-        working-directory: desktop
+      - name: Extract the test package into a new folder
+        id: extract
         run: |
-          $peer = Start-Process '.link-experiment-staging/native/Release/LinkTestPeer.exe' -PassThru
+          $archive = Get-ChildItem 'desktop/dist/HYDRACTRL-*-win-x64-Portable-*.zip' | Select-Object -First 1
+          if (!$archive) { throw 'Portable ZIP is missing.' }
+          $destination = Join-Path $env:RUNNER_TEMP 'hydractrl-link-portable'
+          Expand-Archive -LiteralPath $archive.FullName -DestinationPath $destination
+          "HYDRACTRL_LINK_PORTABLE=$destination" >> $env:GITHUB_ENV
+      - name: Launch and close the companion peer window
+        run: |
+          $expected = 'HYDRACTRL Link Test Peer'
+          $peer = Start-Process "$env:HYDRACTRL_LINK_PORTABLE/Link Test Peer/LinkTestPeer.exe" -PassThru
           try {
-            for ($i = 0; $i -lt 40 -and !$peer.MainWindowHandle -and !$peer.HasExited; $i++) {
+            for ($i = 0; $i -lt 40 -and !$peer.HasExited -and $peer.MainWindowTitle -ne $expected; $i++) {
               Start-Sleep -Milliseconds 250
               $peer.Refresh()
             }
-            if ($peer.MainWindowTitle -ne 'HYDRACTRL Link Test Peer') { throw 'Link Test Peer window did not open.' }
+            if ($peer.MainWindowTitle -ne $expected) {
+              throw "Link Test Peer window did not open. Title='$($peer.MainWindowTitle)' Exited=$($peer.HasExited) ExitCode=$($peer.ExitCode)"
+            }
             if (!$peer.CloseMainWindow() -or !$peer.WaitForExit(5000) -or $peer.ExitCode -ne 0) {
               throw 'Link Test Peer window did not close cleanly.'
             }
@@ -55,7 +65,8 @@ jobs:
             if (!$peer.HasExited) { Stop-Process -Id $peer.Id -Force }
           }
       - name: Exercise the installed helper and real Link SDK peer
+        if: ${{ !cancelled() && steps.extract.outcome == 'success' }}
         working-directory: desktop
         run: |
-          $env:HYDRACTRL_LINK_TEST_PEER = (Resolve-Path '.link-experiment-staging/native/Release/LinkTestPeer.exe').Path
-          node scripts/smoke.mjs --executable '.link-experiment-staging/app/win-unpacked/HYDRACTRL Link Experimental.exe' --software-gl --optional-output
+          $env:HYDRACTRL_LINK_TEST_PEER = "$env:HYDRACTRL_LINK_PORTABLE/Link Test Peer/LinkTestPeer.exe"
+          node scripts/smoke.mjs --executable "$env:HYDRACTRL_LINK_PORTABLE/HYDRACTRL/HYDRACTRL Link Experimental.exe" --software-gl --optional-output
