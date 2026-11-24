@@ -34,6 +34,7 @@ import {
   serverCommand,
 } from "./config.js";
 import { IPC, registerIpc } from "./ipc.js";
+import { startLinkProbe } from "./linkProbe.js";
 import { createLogger, describeError } from "./log.js";
 import { MAX_IMPORT_FILES, createMediaLibrary } from "./media.js";
 import { buildMenuTemplate } from "./menu.js";
@@ -89,6 +90,7 @@ function main() {
 
   let serverManager = null;
   let outputManager = null;
+  let linkProbe = null;
   let windows = null;
   let lastMenuSignature = null;
   let quitting = false;
@@ -372,6 +374,7 @@ function main() {
     if (shutdownDone) return;
     shutdownDone = true;
     log.info("shutting down");
+    const linkStopped = linkProbe?.stop();
     try {
       outputManager?.dispose();
     } catch (error) {
@@ -382,6 +385,7 @@ function main() {
     } catch (error) {
       log.warn(`server stop failed: ${describeError(error)}`);
     }
+    await linkStopped;
   }
 
   app.on("second-instance", () => windows?.focusMain());
@@ -508,6 +512,19 @@ function main() {
       });
       broadcast();
       serverManager.start();
+      const linkExecutable = process.env.HYDRACTRL_LINK_PROBE;
+      if (!quitting && !packaged && linkExecutable) {
+        const linkLog = log.child("link");
+        try {
+          linkProbe = startLinkProbe({
+            executable: linkExecutable,
+            quantum: process.env.HYDRACTRL_LINK_QUANTUM || 4,
+            log: linkLog,
+          });
+        } catch (error) {
+          linkLog.warn(`probe failed: ${describeError(error)}`);
+        }
+      }
     } catch (error) {
       log.error(`startup failed: ${describeError(error)}`);
       dialog.showErrorBox(

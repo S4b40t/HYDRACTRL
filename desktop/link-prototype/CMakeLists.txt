@@ -1,0 +1,20 @@
+cmake_minimum_required(VERSION 3.16)
+project(HydractrlLinkProbe LANGUAGES CXX)
+
+set(ABLETON_LINK_DIR "" CACHE PATH "Path to the official Ableton Link SDK checkout")
+if(NOT EXISTS "${ABLETON_LINK_DIR}/AbletonLinkConfig.cmake")
+  message(FATAL_ERROR "Set ABLETON_LINK_DIR to the Link SDK checkout. See docs/ABLETON_LINK_PHASE_1.md.")
+endif()
+
+include("${ABLETON_LINK_DIR}/AbletonLinkConfig.cmake")
+add_executable(hydractrl-link main.cpp)
+target_compile_features(hydractrl-link PRIVATE cxx_std_17)
+target_link_libraries(hydractrl-link PRIVATE Ableton::Link)
+link_pin_win32_winnt(hydractrl-link)
+if(WIN32)
+  target_link_libraries(hydractrl-link PRIVATE iphlpapi ws2_32 mswsock)
+endif()
+if(MSVC)
+  set_property(TARGET hydractrl-link PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()

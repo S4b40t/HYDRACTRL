@@ -17,6 +17,7 @@
  *                      WebGL
  *   --optional-output  report a Syphon or Spout output that doesn't start as a
  *                      warning, not a failure (hosted CI runners have no GPU)
+ *   HYDRACTRL_LINK_PROBE=/absolute/path with --dev also checks the Link helper.
  *
  * On Linux without a display, run under `xvfb-run -a`. Exits 1 on any failure.
  */
@@ -663,6 +664,15 @@ async function main() {
       !noGpu ? !/desktop:set-mirror failed/.test(log) : true,
       (log.match(/desktop:set-mirror failed.*/) || [""])[0],
     );
+    if (launch.mode === "dev" && process.env.HYDRACTRL_LINK_PROBE) {
+      const pid = log.match(/\[link\] helper started \(PID (\d+),/)?.[1];
+      check("Link helper delivered timing to Electron main", /\[link\] peers=\d+ bpm=/.test(log));
+      check(
+        "Link helper exited cleanly on app quit",
+        Boolean(pid) && log.includes(`[link] helper exited (PID ${pid}, code 0)`),
+        pid && `pid ${pid}`,
+      );
+    }
     ws.close();
   } catch (error) {
     check("smoke test completed", false, String(error.message || error).slice(0, 300));
