@@ -22,6 +22,12 @@
     preview: $("preview"),
     includeAlpha: $("includeAlpha"),
     autoStart: $("autoStart"),
+    graphics: $("section-graphics"),
+    graphicsPreference: $("graphics-preference"),
+    graphicsRenderer: $("graphics-renderer"),
+    graphicsStatus: $("graphics-status"),
+    graphicsError: $("graphics-error"),
+    openGraphicsSettings: $("open-graphics-settings"),
     serverUrl: $("server-url"),
     outputUrl: $("output-url"),
     copyUrl: $("copy-url"),
@@ -48,6 +54,8 @@
   let savedTimer = null;
   // The last media folder action that failed, until the next one
   let mediaError = null;
+  let graphicsPreference = null;
+  let graphicsBusy = false;
 
   function isEditing(element) {
     return document.activeElement === element;
@@ -223,6 +231,50 @@
     els.logPath.title = app.logPath;
   }
 
+  function showGraphicsError(error) {
+    els.graphicsError.textContent = error?.message || "";
+    els.graphicsError.hidden = !error;
+  }
+
+  async function refreshGraphics() {
+    if (els.graphics.hidden || graphicsBusy) return;
+    graphicsBusy = true;
+    try {
+      const graphics = await api.getGraphicsPreference();
+      graphicsPreference = graphics.preference;
+      els.graphicsPreference.value = graphicsPreference;
+      els.graphicsRenderer.textContent = graphics.renderer || "Unavailable";
+      showGraphicsError(null);
+    } catch (error) {
+      els.graphicsRenderer.textContent = "Unavailable";
+      showGraphicsError(error);
+    } finally {
+      graphicsBusy = false;
+      els.graphicsPreference.disabled = graphicsPreference === null;
+    }
+  }
+
+  async function saveGraphics() {
+    if (graphicsBusy) {
+      els.graphicsPreference.value = graphicsPreference ?? "default";
+      return;
+    }
+    graphicsBusy = true;
+    els.graphicsPreference.disabled = true;
+    els.graphicsStatus.textContent = "";
+    try {
+      graphicsPreference = await api.setGraphicsPreference(els.graphicsPreference.value);
+      els.graphicsStatus.textContent = "Saved. Restart HYDRACTRL to apply.";
+      showGraphicsError(null);
+    } catch (error) {
+      showGraphicsError(error);
+    } finally {
+      els.graphicsPreference.value = graphicsPreference;
+      els.graphicsPreference.disabled = false;
+      graphicsBusy = false;
+    }
+  }
+
   function renderMedia(media) {
     if (!media) return;
     els.mediaFolder.textContent = shortenPath(media.folder);
@@ -355,6 +407,11 @@
     els.autoStart.addEventListener("change", () =>
       update({ output: { autoStart: els.autoStart.checked } }),
     );
+    els.graphicsPreference.addEventListener("change", saveGraphics);
+    els.openGraphicsSettings.addEventListener("click", () =>
+      api.openGraphicsSettings().catch(showGraphicsError),
+    );
+    window.addEventListener("focus", refreshGraphics);
     els.allowNetwork.addEventListener("change", () =>
       update({ server: { allowNetwork: els.allowNetwork.checked } }),
     );
@@ -414,6 +471,10 @@
     .getState()
     .then((initial) => {
       render(initial);
+      if (api.platform === "win32" && initial.app.packaged) {
+        els.graphics.hidden = false;
+        refreshGraphics();
+      }
       const section = window.location.hash.replace(/^#/, "");
       if (section) setTimeout(() => focusSection(section), 50);
     })

@@ -96,6 +96,9 @@ contextBridge.exposeInMainWorld("hydractrlDesktop", {
     ),
   openMediaFolder: () => invoke("desktop:open-media-folder"),
   chooseMediaFolder: () => invoke("desktop:choose-media-folder"),
+  getGraphicsPreference: () => invoke("desktop:get-graphics-preference"),
+  setGraphicsPreference: (preference) => invoke("desktop:set-graphics-preference", preference),
+  openGraphicsSettings: () => invoke("desktop:open-graphics-settings"),
   // Frames of the running output: start(onFrame) gets each one as a VideoFrame
   mirror,
   onState: (callback) => subscribe(STATE_CHANNEL, callback),
