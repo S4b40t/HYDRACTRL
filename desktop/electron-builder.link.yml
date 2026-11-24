@@ -7,8 +7,6 @@ directories:
   output: .link-experiment-staging/app
 
 extraResources:
-  - from: .server-staging/current
-    to: server
   - from: .link-experiment-staging/resources
     to: .
 
