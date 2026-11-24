@@ -33,13 +33,14 @@ function parseSample(line) {
   return sample;
 }
 
-/** Development diagnostic. The child owns discovery and stdin owns its lifetime. */
-export function startLinkProbe({ executable, quantum = 4, log, onSample = () => {} }) {
+/** The child owns discovery and stdin owns its lifetime. */
+export function startLinkProbe({ executable, quantum = 4, log, onSample, onError = () => {} }) {
   if (!isAbsolute(executable)) throw new Error("use an absolute path to hydractrl-link");
   const child = spawn(executable, [String(quantum)], { windowsHide: true });
   const lines = createInterface({ input: child.stdout, crlfDelay: Number.POSITIVE_INFINITY });
   const offsets = [];
   let sentUs = null;
+  let requestedQuantum = quantum;
   let closing = false;
   let closed = false;
   let killTimer;
@@ -57,7 +58,10 @@ export function startLinkProbe({ executable, quantum = 4, log, onSample = () => 
   }
 
   function fail(error) {
-    if (!closing && !closed) log.warn(`probe failed: ${error.message}`);
+    if (!closing && !closed) {
+      log.warn(`helper failed: ${error.message}`);
+      onError(error.message);
+    }
     stop();
   }
 
@@ -80,7 +84,7 @@ export function startLinkProbe({ executable, quantum = 4, log, onSample = () => 
       return;
     }
     sentUs = nowUs;
-    child.stdin.write("sample\n");
+    child.stdin.write(`sample ${requestedQuantum}\n`);
   }, POLL_MS);
 
   child.on("error", fail);
@@ -102,12 +106,7 @@ export function startLinkProbe({ executable, quantum = 4, log, onSample = () => 
       const best = offsets.reduce((a, b) => (a.roundTripUs <= b.roundTripUs ? a : b));
       const timing = estimateLinkTiming(sample, best.offsetUs, receivedUs);
 
-      if (
-        receivedUs >= nextLogUs ||
-        lastSample?.peers !== sample.peers ||
-        lastSample?.bpm !== sample.bpm ||
-        lastSample?.tempoRevision !== sample.tempoRevision
-      ) {
+      if (receivedUs >= nextLogUs || lastSample?.peers !== sample.peers) {
         const { peers, bpm, quantum, tempoRevision } = sample;
         log.info(
           `peers=${peers} bpm=${bpm.toFixed(3)} beat=${timing.beat.toFixed(3)} ` +
@@ -117,11 +116,18 @@ export function startLinkProbe({ executable, quantum = 4, log, onSample = () => 
         nextLogUs = receivedUs + 1_000_000;
       }
       lastSample = sample;
-      onSample({ sample, measurement, offset: best, timing });
+      onSample({ sample, measurement, offset: best, timing, receivedUs });
     } catch (error) {
       fail(error);
     }
   });
 
-  return { pid: child.pid, stop, done };
+  return {
+    pid: child.pid,
+    stop,
+    done,
+    setQuantum(value) {
+      requestedQuantum = value;
+    },
+  };
 }

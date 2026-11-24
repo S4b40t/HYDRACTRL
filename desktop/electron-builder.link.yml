@@ -1,0 +1,17 @@
+extends: ./electron-builder.yml
+appId: dev.d17e.hydractrl.link-experimental
+productName: HYDRACTRL Link Experimental
+executableName: HYDRACTRL Link Experimental
+
+directories:
+  output: .link-experiment-staging/app
+
+extraResources:
+  - from: .server-staging/current
+    to: server
+  - from: .link-experiment-staging/resources
+    to: .
+
+win:
+  target: dir
+  signAndEditExecutable: false

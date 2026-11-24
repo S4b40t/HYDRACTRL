@@ -2,6 +2,7 @@
 // the page re-renders from the state pushed back by the main process.
 (() => {
   const api = window.hydractrlDesktop;
+  const link = window.hydractrlLinkSettings;
   const $ = (id) => document.getElementById(id);
 
   const els = {
@@ -35,6 +36,12 @@
     serverMode: $("server-mode"),
     logPath: $("log-path"),
     openLogs: $("open-logs"),
+    linkSection: $("section-link"),
+    linkEnabled: $("link-enabled"),
+    linkQuantum: $("link-quantum"),
+    linkState: $("link-state"),
+    linkError: $("link-error"),
+    linkCopy: $("link-copy"),
   };
 
   let state = null;
@@ -137,6 +144,9 @@
     state = next;
     const { output, settings, server, app, presets, frameRates } = state;
     els.version.textContent = `v${app.version}`;
+    els.linkSection.hidden = !state.linkAvailable && !settings.link?.enabled;
+    els.linkEnabled.checked = settings.link?.enabled === true;
+    if (!isEditing(els.linkQuantum)) els.linkQuantum.value = settings.link?.quantum ?? 4;
 
     const status = describeStatus(output);
     els.dot.dataset.tone = status.tone;
@@ -257,9 +267,58 @@
     }
   }
 
+  async function updateLink(patch) {
+    try {
+      if (await link.configure(patch)) flashSaved();
+    } catch (error) {
+      els.linkError.textContent = error.message;
+      els.linkError.hidden = false;
+    }
+  }
+
+  async function refreshLink() {
+    if (!els.linkSection.hidden) {
+      try {
+        const view = await link.diagnostics();
+        const label = {
+          disabled: "Disabled",
+          unavailable: "Helper unavailable",
+          starting: "Starting",
+          local: "Local timing",
+          synced: "Synced",
+          stale: "Stale timing",
+          retrying: "Retrying",
+        }[view.state];
+        els.linkState.textContent = `${label} · helper ${view.helper} · ${view.peers} peers · ${view.anchor.bpm.toFixed(1)} BPM · phase ${view.phase.toFixed(2)} / ${view.anchor.quantum}`;
+        els.linkError.textContent = view.error || "";
+        els.linkError.hidden = !view.error;
+      } catch (_error) {
+        els.linkState.textContent = "Link status unavailable";
+      }
+    }
+    setTimeout(refreshLink, 300);
+  }
+
   function bind() {
     els.toggle.addEventListener("click", () => api.toggleOutput().catch(() => {}));
     els.restart.addEventListener("click", () => api.restartOutput().catch(() => {}));
+    if (link) {
+      els.linkEnabled.addEventListener("change", () =>
+        updateLink({ enabled: els.linkEnabled.checked }),
+      );
+      els.linkQuantum.addEventListener("change", () =>
+        updateLink({ quantum: +els.linkQuantum.value }),
+      );
+      els.linkCopy.addEventListener("click", () =>
+        link
+          .copyDiagnostics()
+          .then((copied) => {
+            if (copied) flashSaved();
+          })
+          .catch(() => {}),
+      );
+      refreshLink();
+    }
 
     els.name.addEventListener("change", () => update({ output: { name: els.name.value } }));
     els.name.addEventListener("keydown", (event) => {
@@ -332,6 +391,7 @@
       name: els.name,
       server: els.allowNetwork,
       media: els.chooseMedia,
+      link: els.linkEnabled,
     };
     const target = map[section];
     if (!target) return;

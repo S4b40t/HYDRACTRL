@@ -48,15 +48,19 @@ void probe(const double quantum)
   {
     if (!command.empty() && command.back() == '\r') command.pop_back();
     if (command == "quit") break;
-    if (command != "sample") throw std::runtime_error("expected sample or quit");
+    double sampleQuantum = quantum;
+    if (command.compare(0, 7, "sample ") == 0)
+      sampleQuantum = parseQuantum(command.c_str() + 7);
+    else if (command != "sample")
+      throw std::runtime_error("expected sample [quantum] or quit");
 
     const auto state = link.captureAppSessionState();
     const auto hostTime = link.clock().micros();
     std::cout << "{\"version\":1,\"hostUs\":" << hostTime.count()
               << ",\"bpm\":" << state.tempo()
-              << ",\"beat\":" << state.beatAtTime(hostTime, quantum)
-              << ",\"phase\":" << state.phaseAtTime(hostTime, quantum)
-              << ",\"quantum\":" << quantum
+              << ",\"beat\":" << state.beatAtTime(hostTime, sampleQuantum)
+              << ",\"phase\":" << state.phaseAtTime(hostTime, sampleQuantum)
+              << ",\"quantum\":" << sampleQuantum
               << ",\"peers\":" << link.numPeers()
               << ",\"enabled\":" << (link.isEnabled() ? "true" : "false")
               << ",\"tempoRevision\":" << tempoRevision.load(std::memory_order_relaxed)

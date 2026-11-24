@@ -105,6 +105,9 @@ export function buildMenuTemplate({ platform, appName, state, actions }) {
         click: (item) => actions.setAutoStart(item.checked),
       },
       { type: "separator" },
+      ...(state.linkAvailable
+        ? [{ label: "Ableton Link…", click: () => actions.openSettings("link") }]
+        : []),
       {
         label: "Output Settings…",
         accelerator: "CmdOrCtrl+,",

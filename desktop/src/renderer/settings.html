@@ -73,6 +73,22 @@
       </label>
     </section>
 
+    <section class="card" id="section-link" hidden>
+      <h2>Ableton Link</h2>
+      <label class="switch">
+        <input type="checkbox" id="link-enabled">
+        <span class="track"></span>
+        <span class="label">Enable Ableton Link</span>
+      </label>
+      <div class="field">
+        <label for="link-quantum">Beats per cycle</label>
+        <input id="link-quantum" type="number" min="1" max="16" step="1" value="4">
+      </div>
+      <p id="link-state" class="hint">Disabled</p>
+      <div class="error-box" id="link-error" hidden></div>
+      <div class="actions"><button id="link-copy">Copy Link Diagnostics</button></div>
+    </section>
+
     <section class="card" id="section-server">
       <h2>Server</h2>
       <div class="kv">

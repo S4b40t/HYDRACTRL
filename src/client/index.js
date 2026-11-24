@@ -14,10 +14,12 @@ import { createPluginHost } from "./core/PluginHost.js";
 import { createSafeStorage } from "./core/Storage.js";
 import { createAudioInputs } from "./core/audioInput.js";
 import { createEditorTabs } from "./core/editorTabs.js";
+import { installLinkClient } from "./core/linkClient.js";
 import { notify, notifyError } from "./core/notify.js";
 import { createRenderLoop } from "./core/renderLoop.js";
 import { executeSketch } from "./core/sketchRunner.js";
 import { nextUiAction } from "./core/uiCycle.js";
+import { createAbletonLinkPlugin } from "./plugins/AbletonLinkPlugin.js";
 import { createAudioInputPlugin } from "./plugins/AudioInputPlugin.js";
 import { createAudioWatchdogPlugin } from "./plugins/AudioWatchdogPlugin.js";
 import { createAutoRunPlugin } from "./plugins/AutoRunPlugin.js";
@@ -562,6 +564,7 @@ async function init() {
     const tablet = isTablet();
 
     const editor = initEditor(); // No longer async
+    const link = installLinkClient(window);
     const hydra = await initHydra();
     const renderLoop = createRenderLoop((dt) => hydra.tick(dt));
     renderLoop.start();
@@ -913,6 +916,7 @@ async function init() {
     pluginHost.register(createDesktopOutputPlugin());
     pluginHost.register(createDesktopMirrorPlugin());
     pluginHost.register(createDesktopMediaPlugin());
+    if (link) pluginHost.register(createAbletonLinkPlugin(link));
     pluginHost.register(createCodeOverlayPlugin());
     pluginHost.register(createMidiUiPlugin());
     pluginHost.register(createMobileUiPlugin());

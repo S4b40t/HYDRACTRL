@@ -61,6 +61,7 @@ const defaultTimers = { setTimeout, clearTimeout, setInterval, clearInterval };
 export function createServerManager({
   port,
   allowNetwork = false,
+  attachExisting = true,
   command,
   spawn,
   fetch: fetchImpl,
@@ -316,11 +317,11 @@ export function createServerManager({
     try {
       set({ status: SERVER_STATUS.probing, error: null });
       const found = await probeServer(fetchImpl, port);
-      if (found === "hydractrl") {
+      if (found === "hydractrl" && attachExisting) {
         attach(port);
       } else {
         let chosen = port;
-        if (found === "busy") {
+        if (found === "busy" || found === "hydractrl") {
           chosen = await findFreePort(port + 1);
           log.warn(`port ${port} is taken by another program; using port ${chosen} instead`);
         }
