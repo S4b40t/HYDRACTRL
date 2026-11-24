@@ -22,7 +22,10 @@ function expandArtifactName(pattern, { os, arch, ext }) {
 }
 
 function artifactNames() {
-  const config = readFileSync(join(ROOT, "desktop", "electron-builder.yml"), "utf8");
+  const config = readFileSync(join(ROOT, "desktop", "electron-builder.yml"), "utf8").replaceAll(
+    "\r\n",
+    "\n",
+  );
   const top = config.match(/^artifactName: (.+)$/m)?.[1];
   const nsis = config.match(/^nsis:\n(?: {2}.*\n)*? {2}artifactName: (.+)$/m)?.[1];
   return { top, nsis };
