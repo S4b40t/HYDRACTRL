@@ -138,7 +138,6 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
 
 int runWindow()
 {
-  FreeConsole();
   SetProcessDPIAware();
   TestPeer peer;
   WNDCLASSW type{};
@@ -168,15 +167,16 @@ int runWindow()
 #endif
 } // namespace
 
-int main(int argc, char** argv)
+int peerMain(bool pipeMode)
 {
   try
   {
-    if (argc == 2 && std::string(argv[1]) == "--pipe") return runPipeTest();
+    if (pipeMode) return runPipeTest();
 #ifdef _WIN32
-    if (argc == 1) return runWindow();
-#endif
+    return runWindow();
+#else
     return 2;
+#endif
   }
   catch (const std::exception& error)
   {
@@ -184,3 +184,15 @@ int main(int argc, char** argv)
     return 1;
   }
 }
+
+#ifdef _WIN32
+int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR arguments, int)
+{
+  return peerMain(std::string(arguments) == "--pipe");
+}
+#else
+int main(int argc, char** argv)
+{
+  return peerMain(argc == 2 && std::string(argv[1]) == "--pipe");
+}
+#endif
