@@ -35,8 +35,25 @@ jobs:
           Push-Location desktop
           bun install --frozen-lockfile
           Pop-Location
-      - name: Compile MSVC x64 helper and test peer and package the app locally
-        run: ./desktop/scripts/build-link-portable.ps1 -SkipZip
+      - name: Build the Windows x64 Portable ZIP locally
+        run: ./desktop/scripts/build-link-portable.ps1
+      - name: Launch and close the companion peer window
+        working-directory: desktop
+        run: |
+          $peer = Start-Process '.link-experiment-staging/native/Release/LinkTestPeer.exe' -PassThru
+          try {
+            for ($i = 0; $i -lt 40 -and !$peer.MainWindowHandle -and !$peer.HasExited; $i++) {
+              Start-Sleep -Milliseconds 250
+              $peer.Refresh()
+            }
+            if ($peer.MainWindowTitle -ne 'HYDRACTRL Link Test Peer') { throw 'Link Test Peer window did not open.' }
+            if (!$peer.CloseMainWindow() -or !$peer.WaitForExit(5000) -or $peer.ExitCode -ne 0) {
+              throw 'Link Test Peer window did not close cleanly.'
+            }
+            Write-Host 'Link Test Peer window opened and exited cleanly.'
+          } finally {
+            if (!$peer.HasExited) { Stop-Process -Id $peer.Id -Force }
+          }
       - name: Exercise the installed helper and real Link SDK peer
         working-directory: desktop
         run: |
