@@ -49,5 +49,6 @@ Thumbs.db
 
 # Desktop app build staging
 desktop/.server-staging/
+desktop/.link-experiment-staging/
 desktop/dist/
 *.exe

@@ -1,0 +1,7 @@
+extends: ./electron-builder.portable.yml
+extraResources:
+  - from: .link-experiment-staging/resources/link
+    to: link
+win:
+  target: dir
+  signAndEditExecutable: false

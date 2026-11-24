@@ -69,6 +69,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // Where dropped images and videos go; empty means the app's own folder
     folder: "",
   }),
+  link: Object.freeze({ enabled: false, quantum: 4 }),
   // The sketch's code drawn over the visuals on the output; the interface
   // edits it, the Output menu switches it on and off
   codeOverlay: Object.freeze({
@@ -135,6 +136,8 @@ export function validateSettings(input, base = DEFAULT_SETTINGS) {
   const output = raw.output && typeof raw.output === "object" ? raw.output : {};
   const server = raw.server && typeof raw.server === "object" ? raw.server : {};
   const media = raw.media && typeof raw.media === "object" ? raw.media : {};
+  const link = raw.link && typeof raw.link === "object" ? raw.link : {};
+  const linkDefaults = base.link ?? DEFAULT_SETTINGS.link;
   const codeOverlay = raw.codeOverlay && typeof raw.codeOverlay === "object" ? raw.codeOverlay : {};
   return {
     output: {
@@ -157,6 +160,10 @@ export function validateSettings(input, base = DEFAULT_SETTINGS) {
     },
     media: {
       folder: toFolder(media.folder, base.media.folder),
+    },
+    link: {
+      enabled: toBool(link.enabled, linkDefaults.enabled),
+      quantum: clampInt(link.quantum, 1, 16, linkDefaults.quantum),
     },
     codeOverlay: {
       visible: toBool(codeOverlay.visible, base.codeOverlay.visible),

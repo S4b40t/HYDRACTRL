@@ -8,6 +8,11 @@ version and the desktop app share one version number; see
 
 ## [Unreleased]
 
+## [1.2.2-portable.midi-signature-link.1] - 2026-11-24
+
+- Add opt-in Ableton Link timing and a companion test peer to the Windows Portable.
+- Carry forward MIDI control, Signature Assist, and the existing Portable profile and local origin.
+
 ## [1.2.2] - 2026-11-13
 
 Choose the audio input `a.fft` listens to, a quieter code overlay, and setup

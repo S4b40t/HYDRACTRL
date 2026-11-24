@@ -27,6 +27,7 @@ import {
   normalizeSlotsState,
   runningSnapshot,
 } from "./core/editorSnapshot.js";
+import { installLinkClient } from "./core/linkClient.js";
 import { buildOutputSocketUrl, detectOutputServer } from "./core/outputProtocol.js";
 import { createPrimaryRunner } from "./core/primaryRunner.js";
 import { applySketchParameters, executeSketch, readSketchParameters } from "./core/sketchRunner.js";
@@ -106,6 +107,7 @@ async function init() {
     let socket = null;
     let hasRunSketch = false;
     const primary = new URLSearchParams(window.location.search).has("primary");
+    if (primary) installLinkClient(window);
     const primaryRunner = primary ? createPrimaryRunner({ hydra }) : null;
 
     // Part of the page, so the frames the desktop app shares carry it

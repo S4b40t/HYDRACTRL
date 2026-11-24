@@ -65,6 +65,7 @@ export function createServerManager({
   port,
   allowNetwork = false,
   fixedOrigin = false,
+  attachExisting = true,
   command,
   spawn,
   fetch: fetchImpl,
@@ -326,11 +327,11 @@ export function createServerManager({
         if (found !== "free")
           throw new Error(`Portable needs port ${port}. Close the program using it and retry.`);
         await launch(port);
-      } else if (found === "hydractrl") {
+      } else if (found === "hydractrl" && attachExisting) {
         attach(port);
       } else {
         let chosen = port;
-        if (found === "busy") {
+        if (found === "busy" || found === "hydractrl") {
           chosen = await findFreePort(port + 1);
           log.warn(`port ${port} is taken by another program; using port ${chosen} instead`);
         }

@@ -10,6 +10,8 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import net from "node:net";
+import { isAbsolute, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   BrowserWindow,
   Menu,
@@ -18,6 +20,7 @@ import {
   desktopCapturer,
   dialog,
   ipcMain,
+  powerMonitor,
   powerSaveBlocker,
   screen,
   session,
@@ -28,12 +31,16 @@ import {
   APP_ID,
   APP_NAME,
   ICON_PATH,
+  LINK_EXPERIMENT_PROFILE,
+  LINK_PRELOAD_PATH,
   PRELOAD_PATH,
   RENDERER_DIR,
   resolvePaths,
   serverCommand,
 } from "./config.js";
 import { IPC, registerIpc } from "./ipc.js";
+import { registerLinkIpc } from "./linkIpc.js";
+import { createLinkService } from "./linkService.js";
 import { createLogger, describeError } from "./log.js";
 import { MAX_IMPORT_FILES, createMediaLibrary } from "./media.js";
 import { buildMenuTemplate } from "./menu.js";
@@ -50,8 +57,18 @@ import {
 import { createWindowStateStore } from "./windowState.js";
 import { createWindowManager } from "./windows.js";
 
-app.setName(APP_NAME);
-if (process.platform === "win32") app.setAppUserModelId(APP_ID);
+const linkExperiment =
+  app.isPackaged && fs.existsSync(join(process.resourcesPath, "link-experiment"));
+const appName = linkExperiment ? LINK_EXPERIMENT_PROFILE : APP_NAME;
+app.setName(appName);
+if (linkExperiment) {
+  const profile =
+    app.commandLine.getSwitchValue("user-data-dir") || join(app.getPath("appData"), appName);
+  fs.mkdirSync(profile, { recursive: true });
+  app.setPath("userData", profile);
+  app.setPath("sessionData", profile);
+}
+if (process.platform === "win32") app.setAppUserModelId(linkExperiment ? `${APP_ID}.link` : APP_ID);
 
 function start() {
   let portable;
@@ -94,12 +111,12 @@ function main(portable) {
     log.error(`unhandled rejection: ${describeError(reason)}`),
   );
 
-  const settingsStore = createSettingsStore({
-    filePath: paths.settingsFile,
-    fs,
-    log,
-    defaults: portable ? validateSettings({ output: PORTABLE_OUTPUT }) : undefined,
-  });
+  const defaults = portable
+    ? validateSettings({ output: PORTABLE_OUTPUT })
+    : linkExperiment
+      ? validateSettings({ server: { port: 13000 }, output: { name: appName } })
+      : undefined;
+  const settingsStore = createSettingsStore({ filePath: paths.settingsFile, fs, log, defaults });
   settingsStore.load();
   const windowStateStore = createWindowStateStore({ filePath: paths.windowStateFile, fs, log });
   // Images and videos dropped on the editor go to the media folder, which the
@@ -109,6 +126,16 @@ function main(portable) {
 
   let serverManager = null;
   let outputManager = null;
+  const helperPath = packaged
+    ? join(
+        process.resourcesPath,
+        "link",
+        process.platform === "win32" ? "hydractrl-link.exe" : "hydractrl-link",
+      )
+    : process.env.HYDRACTRL_LINK_PROBE;
+  const linkExecutable =
+    helperPath && isAbsolute(helperPath) && fs.existsSync(helperPath) ? helperPath : null;
+  const link = createLinkService({ executable: linkExecutable, log: log.child("link") });
   let windows = null;
   let lastMenuSignature = null;
   let quitting = false;
@@ -144,7 +171,7 @@ function main(portable) {
   function getAppState() {
     return {
       app: {
-        name: APP_NAME,
+        name: appName,
         version: app.getVersion(),
         platform: process.platform,
         packaged,
@@ -159,6 +186,7 @@ function main(portable) {
         ? outputManager.getStatus()
         : { available: false, protocol: null, state: "stopped", unavailableReason: "loading" },
       settings: settingsStore.get(),
+      linkAvailable: Boolean(linkExecutable),
       media: getMediaState(),
       presets: RESOLUTION_PRESETS,
       frameRates: FRAME_RATES,
@@ -177,7 +205,7 @@ function main(portable) {
     lastMenuSignature = signature;
     const template = buildMenuTemplate({
       platform: process.platform,
-      appName: APP_NAME,
+      appName,
       state,
       actions: menuActions,
     });
@@ -197,6 +225,9 @@ function main(portable) {
     const { settings, changed } = settingsStore.update(partial);
     if (changed.length > 0) {
       log.info(`settings changed: ${changed.join(", ")}`);
+      if (changed.includes("link.enabled") || changed.includes("link.quantum")) {
+        link.configure(settings.link);
+      }
       if (outputManager) await outputManager.applySettings(settings.output, changed);
       // The server we spawned switches folders straight away; one started
       // later gets the folder in its environment
@@ -397,6 +428,7 @@ function main(portable) {
     if (shutdownDone) return;
     shutdownDone = true;
     log.info("shutting down");
+    const linkStopped = link.stop();
     try {
       outputManager?.dispose();
     } catch (error) {
@@ -407,6 +439,7 @@ function main(portable) {
     } catch (error) {
       log.warn(`server stop failed: ${describeError(error)}`);
     }
+    await linkStopped;
   }
 
   app.on("second-instance", () => windows?.focusMain());
@@ -438,6 +471,8 @@ function main(portable) {
   app.whenReady().then(async () => {
     try {
       security.installOnSession(session.defaultSession);
+      powerMonitor.on("suspend", () => link.setSuspended(true));
+      powerMonitor.on("resume", () => link.setSuspended(false));
       if (process.platform === "darwin") {
         app.setAboutPanelOptions({
           applicationName: APP_NAME,
@@ -451,7 +486,7 @@ function main(portable) {
       windows = createWindowManager({
         BrowserWindow,
         screen,
-        appName: APP_NAME,
+        appName,
         preloadPath: PRELOAD_PATH,
         rendererDir: RENDERER_DIR,
         iconPath: ICON_PATH,
@@ -484,7 +519,10 @@ function main(portable) {
           stopOutput: () => outputManager?.stop(),
           toggleOutput: () => outputManager?.toggle() ?? false,
           restartOutput: () => outputManager?.restart() ?? false,
-          updateSettings: (partial) => updateSettings(partial),
+          updateSettings: (partial) => {
+            const { output, server, media, codeOverlay } = partial ?? {};
+            return updateSettings({ output, server, media, codeOverlay });
+          },
           openSettings: (section) => {
             windows.openSettings(typeof section === "string" ? section : undefined);
           },
@@ -508,11 +546,30 @@ function main(portable) {
           },
         },
       });
+      registerLinkIpc({
+        ipcMain,
+        getWindows: () => ({
+          editor: windows.getMainWindow()?.webContents,
+          settings: windows.getSettingsWindow()?.webContents,
+          primary: outputManager?.getPrimaryContents(),
+          serverUrl: serverManager?.getState().url,
+          settingsUrl: pathToFileURL(join(RENDERER_DIR, "settings.html")).href,
+        }),
+        service: link,
+        configure: async (next) => (await updateSettings({ link: next })).link,
+        clipboard,
+        appInfo: () => ({
+          version: app.getVersion(),
+          platform: process.platform,
+          output: outputManager?.getStatus().state,
+        }),
+      });
 
       const availability = await loadOutputAvailability();
       outputManager = createOutputManager({
         createBridge: availability.createBridge,
         availability,
+        linkPreload: LINK_PRELOAD_PATH,
         getRendererUrl: () => {
           const state = serverManager?.getState();
           return state?.status === "ready" ? state.url : null;
@@ -534,6 +591,7 @@ function main(portable) {
         port: portable?.port ?? settings.server.port,
         fixedOrigin: Boolean(portable),
         allowNetwork: !portable && settings.server.allowNetwork,
+        attachExisting: !linkExperiment,
         command: serverCommand({ packaged, paths }),
         spawn,
         fetch: globalThis.fetch,
@@ -544,6 +602,7 @@ function main(portable) {
       });
       broadcast();
       serverManager.start();
+      if (!quitting) link.configure(settings.link);
     } catch (error) {
       log.error(`startup failed: ${describeError(error)}`);
       dialog.showErrorBox(

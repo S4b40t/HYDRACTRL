@@ -7,6 +7,18 @@ const { contextBridge, ipcRenderer, sharedTexture, webUtils } = require("electro
 const STATE_CHANNEL = "desktop:state";
 const FOCUS_CHANNEL = "desktop:focus-section";
 
+if (location.protocol === "file:") {
+  contextBridge.exposeInMainWorld("hydractrlLinkSettings", {
+    diagnostics: () => ipcRenderer.invoke("link:diagnostics"),
+    configure: (link) => ipcRenderer.invoke("link:configure", link),
+    copyDiagnostics: () => ipcRenderer.invoke("link:copy-diagnostics"),
+  });
+} else {
+  contextBridge.exposeInMainWorld("hydractrlLinkTiming", {
+    snapshot: () => ipcRenderer.invoke("link:snapshot"),
+  });
+}
+
 async function invoke(channel, ...args) {
   const result = await ipcRenderer.invoke(channel, ...args);
   if (result && result.ok) return result.value;

@@ -11,6 +11,10 @@ New profiles start at 1280 × 720, 60 FPS, with Spout alpha enabled. In Desktop 
 
 Expand **System**, select the controller, and open **MIDI mappings**. Learn a rotary for **Pending slot**, a separate button for **Confirm pending slot**, and two bank controls. Learn knobs or faders for parameters declared with `midiParam()` after saving and running the sketch in a slot. See [the MIDI guide](MIDI.md) for the UC-33 acceptance checklist and button modes.
 
+## Ableton Link
+
+Open **Output → Ableton Link…** to enable the desktop timing bridge. Link is disabled by default. The bundled **Link Test Peer** can drive a private test session with the supplied **Link Test Scene**. The [Windows Link test guide](LINK-WINDOWS-TEST.md) describes the sender and peer controls.
+
 ## Storage and recovery
 
 The **portable-data** folder beside HYDRACTRL.exe holds the browser profile, scene banks, Setup, MIDI assignments, settings, logs, and default media. The renderer uses the fixed local origin **http://127.0.0.1:43129**. If that port is in use, close the other listener and retry. Moving or renaming the parent folder preserves the profile when you move its contents together.
