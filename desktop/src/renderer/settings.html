@@ -73,6 +73,28 @@
       </label>
     </section>
 
+    <section class="card" id="section-graphics" hidden>
+      <h2>Graphics · Windows</h2>
+      <div class="field">
+        <label for="graphics-preference">Graphics preference</label>
+        <select id="graphics-preference" disabled>
+          <option value="default">Let Windows decide</option>
+          <option value="power-saving">Power saving</option>
+          <option value="high-performance">High performance</option>
+          <option value="custom" disabled>Custom Windows selection</option>
+        </select>
+        <p class="hint">Restart HYDRACTRL after changing this setting. Windows saves it for this executable path on this PC.</p>
+      </div>
+      <div class="field">
+        <span class="key">Active renderer</span>
+        <p class="hint" id="graphics-renderer">Checking…</p>
+      </div>
+      <div class="actions"><button id="open-graphics-settings">Windows Graphics Settings</button></div>
+      <p class="hint">Use the same GPU for HYDRACTRL and your Spout receiver.</p>
+      <p class="hint" id="graphics-status" role="status"></p>
+      <div class="error-box" id="graphics-error" role="alert" hidden></div>
+    </section>
+
     <section class="card" id="section-server">
       <h2>Server</h2>
       <div class="kv">

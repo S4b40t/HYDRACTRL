@@ -85,11 +85,19 @@ The **Output** menu (and the settings window, `Cmd/Ctrl+,`) controls:
 | Include alpha | Per-pixel alpha for overlay compositing. Off by default. |
 | Show Code on Output | Draws your code over the visuals on the output as you type it, with the scenes and slots (Output menu only). Set its blend mode and opacity in the interface's system panel, under CODE OVERLAY. Off by default. |
 | Start output at launch | On by default. |
+| Graphics preference | Windows packaged builds. Choose the Windows default, power-saving GPU or high-performance GPU, then restart HYDRACTRL. |
 | Allow network access | Lets OBS or TouchDesigner on another computer reach the server and its `/output` page. Off by default; applies on the next launch. |
 
 Settings live in the app's data folder (`Application Support/HYDRACTRL` on
 macOS, `%APPDATA%\HYDRACTRL` on Windows) next to the log file, which the
 settings window and the Help menu can open for you.
+
+On Windows, the **Graphics** section shows the renderer currently in use.
+If a Spout receiver uses a different GPU, choose a matching preference for
+HYDRACTRL and the receiver. Use **Windows Graphics Settings** to choose an
+exact adapter where Windows offers one. Windows saves this choice per user
+and executable path. Set it again after copying the Portable to another
+machine or executable path. [Windows graphics preferences](https://support.microsoft.com/en-us/windows/hardware/display-graphics/optimizations-for-windowed-games-in-windows-11)
 
 ### Images and videos
 

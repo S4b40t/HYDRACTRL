@@ -23,6 +23,9 @@ export const IPC = Object.freeze({
   importMedia: "desktop:import-media",
   openMediaFolder: "desktop:open-media-folder",
   chooseMediaFolder: "desktop:choose-media-folder",
+  getGraphicsPreference: "desktop:get-graphics-preference",
+  setGraphicsPreference: "desktop:set-graphics-preference",
+  openGraphicsSettings: "desktop:open-graphics-settings",
   /** The interface asks for (true) or lets go of (false) the output's frames. */
   setMirror: "desktop:set-mirror",
   /** Push channel: the full app state, on every change. */
@@ -42,7 +45,10 @@ export function registerIpc({ ipcMain, isTrustedSender, handlers, log }) {
         return { ok: false, error: "untrusted sender" };
       }
       try {
-        const value = await handler.call({ sender: event.sender }, ...args);
+        const value = await handler.call(
+          { sender: event.sender, frame: event.senderFrame },
+          ...args,
+        );
         return { ok: true, value };
       } catch (error) {
         log.error(`${channel} failed: ${describeError(error)}`);

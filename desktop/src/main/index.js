@@ -10,6 +10,8 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import net from "node:net";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   BrowserWindow,
   Menu,
@@ -43,6 +45,11 @@ import { createServerManager } from "./server.js";
 import { FRAME_RATES, RESOLUTION_PRESETS, createSettingsStore } from "./settings.js";
 import { createWindowStateStore } from "./windowState.js";
 import { createWindowManager } from "./windows.js";
+import {
+  WINDOWS_GRAPHICS_SETTINGS,
+  activeGraphicsRenderer,
+  windowsGraphicsPreference,
+} from "./windowsGraphics.js";
 
 app.setName(APP_NAME);
 if (process.platform === "win32") app.setAppUserModelId(APP_ID);
@@ -98,6 +105,24 @@ function main() {
   // The interface asked for the output's frames (DesktopMirrorPlugin). Reset
   // whenever its page goes away, until the new page asks again.
   let mirrorRequested = false;
+
+  const canChooseGraphics = packaged && process.platform === "win32";
+  const settingsUrl = pathToFileURL(join(RENDERER_DIR, "settings.html")).href;
+
+  function requireGraphicsSettings({ sender, frame }) {
+    const settings = windows.getSettingsWindow();
+    if (
+      !canChooseGraphics ||
+      !settings ||
+      settings.isDestroyed() ||
+      sender !== settings.webContents ||
+      !frame ||
+      frame !== sender.mainFrame ||
+      frame.url.split("#")[0] !== settingsUrl
+    ) {
+      throw new Error("Graphics preferences are only available in Windows Output Settings.");
+    }
+  }
 
   const security = createSecurityPolicy({
     getServerUrl: () => serverManager?.getState().url ?? null,
@@ -461,6 +486,23 @@ function main() {
           importMedia,
           openMediaFolder,
           chooseMediaFolder,
+          async getGraphicsPreference() {
+            requireGraphicsSettings(this);
+            const [preference, gpu] = await Promise.all([
+              windowsGraphicsPreference(app.getPath("exe")),
+              app.getGPUInfo("complete").catch(() => null),
+            ]);
+            return { preference, renderer: activeGraphicsRenderer(gpu) };
+          },
+          setGraphicsPreference(preference) {
+            requireGraphicsSettings(this);
+            if (typeof preference !== "string") throw new Error("Unknown graphics preference.");
+            return windowsGraphicsPreference(app.getPath("exe"), preference);
+          },
+          openGraphicsSettings() {
+            requireGraphicsSettings(this);
+            return shell.openExternal(WINDOWS_GRAPHICS_SETTINGS);
+          },
           setMirror(enabled) {
             // Only the interface window draws the frames
             const main = windows.getMainWindow();
