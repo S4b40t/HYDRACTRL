@@ -38,23 +38,38 @@ import { createLogger, describeError } from "./log.js";
 import { MAX_IMPORT_FILES, createMediaLibrary } from "./media.js";
 import { buildMenuTemplate } from "./menu.js";
 import { createOutputManager } from "./output.js";
+import { PORTABLE_OUTPUT, configurePortable } from "./portable.js";
 import { createSecurityPolicy, isAllowedExternalUrl } from "./security.js";
 import { createServerManager } from "./server.js";
-import { FRAME_RATES, RESOLUTION_PRESETS, createSettingsStore } from "./settings.js";
+import {
+  FRAME_RATES,
+  RESOLUTION_PRESETS,
+  createSettingsStore,
+  validateSettings,
+} from "./settings.js";
 import { createWindowStateStore } from "./windowState.js";
 import { createWindowManager } from "./windows.js";
 
 app.setName(APP_NAME);
 if (process.platform === "win32") app.setAppUserModelId(APP_ID);
 
-// One running copy: a second launch focuses the existing window instead
-if (!app.requestSingleInstanceLock()) {
-  app.quit();
-} else {
-  main();
+function start() {
+  let portable;
+  try {
+    portable = configurePortable(app);
+  } catch (error) {
+    dialog.showErrorBox(APP_NAME, describeError(error));
+    app.exit(2);
+    return;
+  }
+  // Scope the lock to the chosen application data directory.
+  if (app.requestSingleInstanceLock()) main(portable);
+  else app.quit();
 }
 
-function main() {
+start();
+
+function main(portable) {
   // hydra's microphone analysis must start without a click, and the render
   // loops must never be throttled while a window is hidden or unfocused.
   app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
@@ -79,7 +94,12 @@ function main() {
     log.error(`unhandled rejection: ${describeError(reason)}`),
   );
 
-  const settingsStore = createSettingsStore({ filePath: paths.settingsFile, fs, log });
+  const settingsStore = createSettingsStore({
+    filePath: paths.settingsFile,
+    fs,
+    log,
+    defaults: portable ? validateSettings({ output: PORTABLE_OUTPUT }) : undefined,
+  });
   settingsStore.load();
   const windowStateStore = createWindowStateStore({ filePath: paths.windowStateFile, fs, log });
   // Images and videos dropped on the editor go to the media folder, which the
@@ -128,6 +148,7 @@ function main() {
         version: app.getVersion(),
         platform: process.platform,
         packaged,
+        portable: Boolean(portable),
         logPath: paths.logFile,
         loadFailure: lastLoadFailure,
         electron: process.versions.electron,
@@ -169,6 +190,10 @@ function main() {
   }
 
   async function updateSettings(partial) {
+    if (portable && partial?.server) {
+      const { server: _server, ...editable } = partial;
+      partial = editable;
+    }
     const { settings, changed } = settingsStore.update(partial);
     if (changed.length > 0) {
       log.info(`settings changed: ${changed.join(", ")}`);
@@ -390,8 +415,18 @@ function main() {
     log.warn(`child process gone: ${details.type} ${details.reason} (${details.exitCode})`);
   });
   app.on("web-contents-created", (_event, contents) => security.attachToContents(contents));
+  function flushPortableStorage() {
+    if (!portable) return;
+    try {
+      session.defaultSession.flushStorageData();
+    } catch (error) {
+      log.warn(`could not flush Portable storage: ${describeError(error)}`);
+    }
+  }
+
   app.on("before-quit", () => {
     quitting = true;
+    flushPortableStorage();
   });
   app.on("will-quit", (event) => {
     if (shutdownDone) return;
@@ -435,7 +470,7 @@ function main() {
           syncMirror();
         },
       });
-      windows.createMainWindow();
+      windows.createMainWindow().on("close", flushPortableStorage);
       windows.showLoading();
       refreshMenu();
 
@@ -496,8 +531,9 @@ function main() {
 
       const settings = settingsStore.get();
       serverManager = createServerManager({
-        port: settings.server.port,
-        allowNetwork: settings.server.allowNetwork,
+        port: portable?.port ?? settings.server.port,
+        fixedOrigin: Boolean(portable),
+        allowNetwork: !portable && settings.server.allowNetwork,
         command: serverCommand({ packaged, paths }),
         spawn,
         fetch: globalThis.fetch,

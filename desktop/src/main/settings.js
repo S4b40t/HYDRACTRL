@@ -194,18 +194,23 @@ const silentLog = { info() {}, warn() {}, error() {} };
  * JSON-file settings store with atomic writes (temp file + rename), so a crash
  * mid-write can never leave a half-written settings file behind.
  */
-export function createSettingsStore({ filePath, fs, log = silentLog }) {
-  let current = validateSettings({}, DEFAULT_SETTINGS);
+export function createSettingsStore({
+  filePath,
+  fs,
+  log = silentLog,
+  defaults = DEFAULT_SETTINGS,
+}) {
+  let current = validateSettings({}, defaults);
 
   function load() {
     try {
       if (fs.existsSync(filePath)) {
         const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-        current = validateSettings(parsed, DEFAULT_SETTINGS);
+        current = validateSettings(parsed, defaults);
       }
     } catch (error) {
       log.warn(`settings: could not read ${filePath} (${error.message}); using defaults`);
-      current = validateSettings({}, DEFAULT_SETTINGS);
+      current = validateSettings({}, defaults);
     }
     return current;
   }

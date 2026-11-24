@@ -19,7 +19,7 @@ function fakeFetch(ports) {
     return {
       ok: true,
       headers: { get: () => "application/json" },
-      json: async () => ({ name: "hydractrl", outputSync: true }),
+      json: async () => ({ name: "hydractrl", outputSync: true, instanceId: kind.instanceId }),
     };
   };
 }
@@ -56,12 +56,20 @@ class FakeChild extends EventEmitter {
   }
 }
 
-function setup({ ports = {}, readyAfterSpawn = true, command, getEnv, log = silentLog } = {}) {
+function setup({
+  ports = {},
+  readyAfterSpawn = true,
+  fixedOrigin = false,
+  command,
+  getEnv,
+  log = silentLog,
+} = {}) {
   const spawned = [];
   const states = [];
   let nextPid = 100;
   const manager = createServerManager({
     port: 3000,
+    fixedOrigin,
     command: command || { file: "hydractrl", args: [], cwd: "/app" },
     spawn: (file, args, options) => {
       const child = new FakeChild(nextPid++);
@@ -69,7 +77,7 @@ function setup({ ports = {}, readyAfterSpawn = true, command, getEnv, log = sile
       if (readyAfterSpawn) {
         // The server comes up on the port it was given
         setTimeout(() => {
-          ports[Number(options.env.PORT)] = "hydractrl";
+          ports[Number(options.env.PORT)] = { instanceId: options.env.HYDRACTRL_INSTANCE_ID };
         }, 5);
       }
       return child;
@@ -111,6 +119,28 @@ describe("probeServer", () => {
 });
 
 describe("createServerManager", () => {
+  test("Portable refuses an occupied origin instead of attaching or changing ports", async () => {
+    for (const occupant of ["hydractrl", "busy"]) {
+      const { manager, spawned } = setup({ ports: { 3000: occupant }, fixedOrigin: true });
+      const state = await manager.start();
+      expect(state.status).toBe("failed");
+      expect(state.error).toContain("Portable needs port 3000");
+      expect(spawned).toHaveLength(0);
+    }
+  });
+
+  test("Portable waits for its own server on the fixed origin", async () => {
+    const { manager, spawned } = setup({ fixedOrigin: true });
+    const state = await manager.start();
+    expect(state).toMatchObject({ status: "ready", url: "http://127.0.0.1:3000", mode: "spawned" });
+    const first = spawned[0].options.env.HYDRACTRL_INSTANCE_ID;
+    expect(first).toMatch(/^[0-9a-f-]+$/);
+    expect(
+      await probeServer(fakeFetch({ 3000: { instanceId: first } }), 3000, 1500, "different"),
+    ).toBe("busy");
+    await manager.stop();
+  });
+
   test("attaches to a server that is already running", async () => {
     const { manager, spawned } = setup({ ports: { 3000: "hydractrl" } });
     const state = await manager.start();

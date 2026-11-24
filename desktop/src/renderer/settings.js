@@ -200,7 +200,8 @@
     els.outputUrl.textContent = url ? `${url}/output` : "–";
     els.copyUrl.disabled = !url;
     els.openOutput.disabled = !url;
-    els.allowNetwork.checked = settings.server.allowNetwork;
+    els.allowNetwork.checked = !app.portable && settings.server.allowNetwork;
+    els.allowNetwork.disabled = app.portable;
 
     renderMedia(state.media);
 

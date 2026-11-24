@@ -321,7 +321,10 @@ try {
   await expectParameter("sync = 0.1");
 
   await setupTab.click();
-  await replace("const scaleMidi = (value, factor) => value * factor;");
+  await replace(`const scaleMidi = (value, factor) => value * factor;
+setFunction({ name: "portableColor", type: "src",
+  inputs: [{ name: "level", type: "float", default: 0.25 }],
+  glsl: "return vec4(vec3(level), 1.0);" });`);
   await sketchTab.click();
   const midiSketch =
     'const intensity = midiParam("Intensity", { default: 0.25, min: 0, max: 1 });\n';
@@ -332,7 +335,9 @@ try {
   );
   await editor.press("Control+Enter");
   await page.waitForFunction(() => window.signatureMidiValue === 0.5);
-  console.log("Setup signature help and MIDI parameter registration coexist in a running sketch.");
+  await replace("portableColor(");
+  await expectParameter("level = 0.25", "portableColor(level = 0.25)");
+  console.log("Setup helper hints, registered GLSL hints, and MIDI parameters coexist.");
 
   await page.evaluate(() => {
     window.testRuns = [];
