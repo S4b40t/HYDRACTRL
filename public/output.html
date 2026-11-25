@@ -24,6 +24,13 @@
       background: #000;
     }
 
+    /* Preserve shader alpha through Chromium's transparent desktop output window. */
+    html.output-alpha,
+    html.output-alpha body,
+    html.output-alpha #hydra-canvas {
+      background: transparent;
+    }
+
     #hydra-canvas canvas {
       display: block;
       width: 100%;

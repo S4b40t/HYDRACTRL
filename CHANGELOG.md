@@ -13,6 +13,7 @@ version and the desktop app share one version number; see
 - Integrate configurable spectral analysis and ship diagnostic sketches and WAV.
 - Preserve MIDI parameter values and spectral baselines across primary output recovery.
 - Include Windows GPU preference selection alongside Ableton Link and Signature Assist.
+- Preserve shader alpha on transparent desktop output and capture music without voice processing.
 
 ## [1.2.2-portable.midi-signature-link.1] - 2026-11-24
 

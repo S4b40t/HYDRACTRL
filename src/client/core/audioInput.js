@@ -75,6 +75,13 @@ function isMicrophoneRequest(constraints) {
   return Boolean(constraints?.audio) && !constraints.video;
 }
 
+// Voice processing can remove bass or flatten amplitude before either FFT sees it.
+const AUDIO_CAPTURE = {
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+};
+
 /**
  * One hydra instance's analyser and the input it listens to.
  * `report` is called whenever that changes.
@@ -106,7 +113,9 @@ function createListener(mediaDevices, report) {
 
   async function openExact(deviceId) {
     try {
-      return await mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId } } });
+      return await mediaDevices.getUserMedia({
+        audio: { ...AUDIO_CAPTURE, deviceId: { exact: deviceId } },
+      });
     } catch (_error) {
       return null;
     }
@@ -139,7 +148,7 @@ function createListener(mediaDevices, report) {
       const byLabel = found.match ? await openExact(found.match.deviceId) : null;
       if (byLabel) return { stream: byLabel, device: found.match, missing: false };
     }
-    const fallback = await mediaDevices.getUserMedia({ video: false, audio: true });
+    const fallback = await mediaDevices.getUserMedia({ video: false, audio: AUDIO_CAPTURE });
     if (choice && !labelled) {
       // Labels only show once the page may listen, which it now does
       const { match } = await lookUp(choice);

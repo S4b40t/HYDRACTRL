@@ -136,7 +136,9 @@ async function init() {
     document.addEventListener("keydown", resumeAudio, { signal: events.signal });
 
     let hasRunSketch = false;
-    const primary = new URLSearchParams(window.location.search).has("primary");
+    const options = new URLSearchParams(window.location.search);
+    const primary = options.has("primary");
+    if (primary && options.has("alpha")) document.documentElement.classList.add("output-alpha");
     if (primary) installLinkClient(window);
     const primaryRunner = primary ? createPrimaryRunner({ hydra }) : null;
 

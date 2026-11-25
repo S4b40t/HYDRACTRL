@@ -155,6 +155,13 @@ describe("createOutputManager", () => {
     expect(blocker.started).toBe(1);
   });
 
+  test("requests a transparent page when the shared output includes alpha", async () => {
+    const { manager, bridges } = setup({ settings: { includeAlpha: true } });
+    expect(await manager.start()).toBe(true);
+    expect(bridges[0].options.includeAlpha).toBe(true);
+    expect(bridges[0].options.rendererUrl).toBe("http://127.0.0.1:3000/output?primary&alpha");
+  });
+
   test("refuses to start when unavailable or without a server", async () => {
     const unavailable = setup({ available: false });
     expect(await unavailable.manager.start()).toBe(false);

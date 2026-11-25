@@ -18,6 +18,7 @@ const INTERFACE = { deviceId: "id-interface", label: "USB Interface" };
 function createMediaDevices(inputs = [BUILT_IN, INTERFACE], { labels = true } = {}) {
   const requests = [];
   const streams = [];
+  const capture = [];
   const listeners = new Set();
   const devices = {
     inputs: [...inputs],
@@ -26,6 +27,7 @@ function createMediaDevices(inputs = [BUILT_IN, INTERFACE], { labels = true } = 
     labelled: labels,
     requests,
     streams,
+    capture,
     async enumerateDevices() {
       const shown = (input) => ({ ...input, label: devices.labelled ? input.label : "" });
       return [
@@ -39,6 +41,7 @@ function createMediaDevices(inputs = [BUILT_IN, INTERFACE], { labels = true } = 
     async getUserMedia(constraints) {
       const exact = constraints.audio?.deviceId?.exact;
       requests.push(exact ?? "default");
+      capture.push(constraints.audio);
       if (!devices.allowed) throw new Error("Permission denied");
       const input = exact ? devices.inputs.find((i) => i.deviceId === exact) : devices.inputs[0];
       if (!input) throw new Error("Requested device not found");
@@ -164,6 +167,11 @@ describe("createAudioInputs", () => {
     await settle();
 
     expect(mediaDevices.requests).toEqual(["default"]);
+    expect(mediaDevices.capture[0]).toEqual({
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    });
     expect(heard(hydra)).toBe("Built-in Microphone");
     expect(audioInputs.getState()).toEqual({
       choice: null,
@@ -183,6 +191,12 @@ describe("createAudioInputs", () => {
     await settle();
 
     expect(mediaDevices.requests).toEqual(["id-interface"]);
+    expect(mediaDevices.capture[0]).toEqual({
+      deviceId: { exact: INTERFACE.deviceId },
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    });
     expect(heard(hydra)).toBe("USB Interface");
     expect(audioInputs.getState().device).toEqual(INTERFACE);
   });

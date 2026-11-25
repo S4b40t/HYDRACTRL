@@ -269,7 +269,7 @@ export function createOutputManager({
         frameRate: settings.frameRate,
         includeAlpha: settings.includeAlpha,
         // The output that runs the interface's sketches itself
-        rendererUrl: `${url}/output?primary`,
+        rendererUrl: `${url}/output?primary${settings.includeAlpha ? "&alpha" : ""}`,
         preview: { enabled: settings.preview, title: "HYDRACTRL Output Preview" },
         webPreferences: {
           backgroundThrottling: false,
