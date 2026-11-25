@@ -54,6 +54,7 @@ function pauseDroppedVideos(previous, hydra) {
 function buildSketchFunction(code) {
   return new AsyncFunction(
     "hydra",
+    "a",
     `
       // Set global h variable to hydra for convenience
       globalThis.h = hydra;
@@ -101,9 +102,14 @@ export function checkSketchSyntax({ setup = "", main = "" } = {}) {
  * @param {{setup?: string, main?: string}} sketch
  * @returns {Promise<{success: true} | {success: false, message: string, error?: unknown}>}
  */
-export async function executeSketch(hydra, { setup = "", main = "" } = {}) {
+export async function executeSketch(hydra, { setup = "", main = "", bandRanges } = {}) {
   const previousVideos = sourceVideos(hydra);
   try {
+    const audio = hydra.synth?.a;
+    if (bandRanges === null) audio?.clearBandRanges?.();
+    else if (bandRanges !== undefined) audio?.setBandRanges?.(bandRanges);
+    const startingBands = audio?.getBandRanges?.();
+
     // Reset all outputs so leftovers from the previous sketch don't linger
     hydra.hush();
 
@@ -112,8 +118,12 @@ export async function executeSketch(hydra, { setup = "", main = "" } = {}) {
     // A syntax error in the sketch throws here, at construction time
     const fn = buildSketchFunction(code);
 
-    const result = await fn(hydra);
-    if (result && result.success) return { success: true };
+    const result = await fn(hydra, audio ?? globalThis.a);
+    if (result?.success) {
+      return startingBands === undefined
+        ? { success: true }
+        : { success: true, bandRanges: startingBands };
+    }
     return {
       success: false,
       error: result?.error,

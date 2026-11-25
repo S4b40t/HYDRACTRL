@@ -6,6 +6,7 @@
  * The core run path keeps mirroring code into the breakout via the
  * `window.breakoutHydra` / `window.breakoutWindow` globals this plugin sets.
  */
+import { createRenderLoop } from "../core/renderLoop.js";
 
 const SIZE_KEY = "hydractrl-breakout-size";
 
@@ -63,6 +64,7 @@ export function createBreakoutPlugin() {
       const display = ctx.getPanels().stats?.display;
       if (ctx.isMobile || !display || !display.sizeSelect) return;
       const select = display.sizeSelect;
+      let disposeHydra = null;
 
       // Offer the size used last time
       const savedSize = ctx.storage.get(SIZE_KEY);
@@ -113,21 +115,31 @@ export function createBreakoutPlugin() {
 
         // Dynamically import hydra-synth in the main window
         const hydraModule = await import("hydra-synth");
+        if (breakoutWindow.closed) return null;
         const HydraSynth = hydraModule.default || hydraModule;
 
         const createHydra = () =>
           new HydraSynth({
             canvas: canvas,
+            autoLoop: false,
             detectAudio: true, // Enable audio reactivity for a.fft[]
             enableStreamCapture: false,
             numBins: 6, // Set bins for a.fft[0], a.fft[1], etc.
             numSources: 4, // Limit sources for better performance
             precision: "mediump", // Better performance
           });
-        // Its a.fft listens to the audio input chosen in the system panel. The
-        // instance becomes hydra's global `a`, so it keeps listening when
-        // the window closes.
+        // Sketch execution binds the breakout's own audio object. Keep the
+        // editor's global a pointing to the editor's input and watchdog.
+        const mainAudio = window.a;
         const breakoutHydra = ctx.audioInputs ? ctx.audioInputs.attach(createHydra) : createHydra();
+        window.a = mainAudio;
+        const loop = createRenderLoop((dt) => breakoutHydra.tick(dt));
+        loop.start();
+        disposeHydra = () => {
+          loop.stop();
+          ctx.audioInputs?.detach(breakoutHydra);
+          breakoutHydra.regl.destroy();
+        };
 
         // Define loadScript function in breakout window
         breakoutWindow.loadScript = (url) =>
@@ -159,14 +171,21 @@ export function createBreakoutPlugin() {
         display.breakoutButton.style.backgroundColor = "";
       }
 
-      function close() {
-        if (window.breakoutWindow && !window.breakoutWindow.closed) {
-          window.breakoutWindow.close();
-        }
+      function releaseWindow(breakoutWindow) {
+        if (window.breakoutWindow !== breakoutWindow) return;
+        disposeHydra?.();
+        disposeHydra = null;
         window.breakoutHydra = null;
         window.breakoutWindow = null;
         resetButton();
         ctx.events.emit("breakout:closed", {});
+      }
+
+      function close() {
+        const breakoutWindow = window.breakoutWindow;
+        if (!breakoutWindow) return;
+        releaseWindow(breakoutWindow);
+        if (!breakoutWindow.closed) breakoutWindow.close();
       }
 
       async function open(width, height, label) {
@@ -176,24 +195,23 @@ export function createBreakoutPlugin() {
         }
 
         window.breakoutWindow = breakoutWindow;
+        breakoutWindow.addEventListener("pagehide", () => releaseWindow(breakoutWindow), {
+          once: true,
+        });
 
         try {
-          window.breakoutHydra = await initBreakoutHydra(breakoutWindow);
+          const hydra = await initBreakoutHydra(breakoutWindow);
+          if (!hydra || window.breakoutWindow !== breakoutWindow) return false;
+          window.breakoutHydra = hydra;
 
           breakoutWindow.document.title = `HYDRACTRL Breakout - ${label || `${width}×${height}`}`;
 
           // Run the current code in the breakout window
-          await ctx.runCodeOn(window.breakoutHydra);
+          await ctx.runCodeOn(hydra);
+          if (window.breakoutWindow !== breakoutWindow) return false;
 
           display.breakoutButton.textContent = "Close";
           display.breakoutButton.style.backgroundColor = "rgba(255, 120, 120, 0.3)";
-
-          breakoutWindow.addEventListener("beforeunload", () => {
-            resetButton();
-            window.breakoutHydra = null;
-            window.breakoutWindow = null;
-            ctx.events.emit("breakout:closed", {});
-          });
 
           ctx.events.emit("breakout:opened", { width, height });
           return true;
@@ -202,12 +220,7 @@ export function createBreakoutPlugin() {
           ctx.notify(`Failed to initialize breakout view: ${error.message}`, { type: "error" });
 
           // Clean up on failure
-          if (window.breakoutWindow) {
-            window.breakoutWindow.close();
-            window.breakoutWindow = null;
-          }
-          window.breakoutHydra = null;
-          resetButton();
+          if (window.breakoutWindow === breakoutWindow) close();
           return false;
         }
       }

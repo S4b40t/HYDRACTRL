@@ -21,10 +21,12 @@ import { checkSketchSyntax, executeSketch } from "./sketchRunner.js";
 export const REMEMBERED_RUNS = 32;
 
 function normalize(sketch) {
-  return {
+  const normalized = {
     setup: typeof sketch?.setup === "string" ? sketch.setup : "",
     main: typeof sketch?.main === "string" ? sketch.main : "",
   };
+  if (sketch?.bandRanges !== undefined) normalized.bandRanges = sketch.bandRanges;
+  return normalized;
 }
 
 export function createPrimaryRunner({
@@ -52,8 +54,9 @@ export function createPrimaryRunner({
     if (syntaxError) return { success: false, message: syntaxError };
     const result = await execute(hydra, sketch);
     if (result.success) {
-      lastGood = sketch;
-      return { success: true };
+      lastGood =
+        result.bandRanges === undefined ? sketch : { ...sketch, bandRanges: result.bandRanges };
+      return result;
     }
     // The failed run hushed the outputs: bring back what was playing
     if (lastGood) await execute(hydra, lastGood);

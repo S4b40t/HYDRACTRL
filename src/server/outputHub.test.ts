@@ -37,6 +37,26 @@ describe("parseIncomingMessage", () => {
     expect(parseIncomingMessage(SKETCH)).toEqual(SKETCH);
   });
 
+  test("validates optional range baselines on sketch and successful result messages", () => {
+    const bandRanges = [
+      [50, 150],
+      [20, 80],
+      [50, 150],
+    ];
+    const result = { type: "result", id: RUN.id, success: true, bandRanges };
+    expect(parseIncomingMessage(result)).toEqual(result);
+    const sketch = { ...SKETCH, bandRanges };
+    expect(parseIncomingMessage(sketch)).toEqual(sketch);
+    expect(parseIncomingMessage({ ...sketch, bandRanges: null })).toEqual({
+      ...sketch,
+      bandRanges: null,
+    });
+    for (const invalid of [[], [[0, Number.NaN]], [[90, 20]], [[2, 2]], [[-1, 2]]]) {
+      expect(parseIncomingMessage({ ...result, bandRanges: invalid })).toBeNull();
+      expect(parseIncomingMessage({ ...sketch, bandRanges: invalid })).toBeNull();
+    }
+  });
+
   test("defaults a missing setup to an empty string", () => {
     expect(parseIncomingMessage({ type: "sketch", main: "osc().out()" })).toEqual({
       type: "sketch",

@@ -105,6 +105,38 @@ describe("createPrimaryRunner", () => {
     expect(log).toEqual(["start s0", "end s0"]);
   });
 
+  test("replays inherited ranges before setup and restores them after a failing run", async () => {
+    function createHydra() {
+      let ranges = null;
+      const audio = {
+        setBandRanges: (next) => {
+          ranges = next;
+        },
+        clearBandRanges: () => {
+          ranges = null;
+        },
+        getBandRanges: () => ranges,
+      };
+      return { synth: { a: audio }, hush() {} };
+    }
+    const hydra = createHydra();
+    const runner = createPrimaryRunner({ hydra });
+    const initial = await runner.run("r1", { main: "a.setBandRanges([[20, 80]])" });
+    expect(initial).toEqual({ success: true, bandRanges: null });
+    const scene = {
+      setup: 'if (a.getBandRanges()?.[0][0] !== 20) throw Error("Missing baseline")',
+      main: "",
+    };
+    const inherited = await runner.run("r2", scene);
+    expect(inherited).toEqual({ success: true, bandRanges: [[20, 80]] });
+    const replacement = createHydra();
+    const output = createPrimaryRunner({ hydra: replacement });
+    expect(await output.runSketch(runner.getLastGood())).toEqual(inherited);
+    const failed = await runner.run("r3", { main: 'a.clearBandRanges(); throw Error("Failed")' });
+    expect(failed).toEqual({ success: false, message: "Failed" });
+    expect(hydra.synth.a.getBandRanges()).toEqual([[20, 80]]);
+  });
+
   test("keeps going after a sketch throws past executeSketch", async () => {
     const runner = createPrimaryRunner({
       hydra: {},

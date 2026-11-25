@@ -354,8 +354,12 @@ async function runCode(editor, hydra) {
     // Let plugins react to a successful run on the main instance
     // (the output-sync plugin mirrors it to external render heads)
     if (hydra === window.mainHydra) {
-      runningSketch = sketch;
-      events.emit("sketch:run", result.runId ? { ...sketch, runId: result.runId } : sketch);
+      runningSketch =
+        result.bandRanges === undefined ? sketch : { ...sketch, bandRanges: result.bandRanges };
+      events.emit(
+        "sketch:run",
+        result.runId ? { ...runningSketch, runId: result.runId } : runningSketch,
+      );
     }
     return true;
   } catch (error) {
@@ -565,6 +569,11 @@ async function init() {
     const hydra = await initHydra();
     const renderLoop = createRenderLoop((dt) => hydra.tick(dt));
     renderLoop.start();
+    window.addEventListener("pagehide", (event) => {
+      if (event.persisted) return;
+      renderLoop.stop();
+      audioInputs.dispose();
+    });
 
     // Apply UI visibility state from localStorage right after panels are created.
     // Only applies when explicitly hidden, so first-time users see the UI.

@@ -83,6 +83,7 @@ export function createOutputSyncPlugin(options = {}) {
         const message = { type: "sketch", setup: sketch.setup || "", main: sketch.main };
         // Ran on the desktop app's own output first, which then skips it
         if (sketch.runId) message.runId = sketch.runId;
+        if (sketch.bandRanges !== undefined) message.bandRanges = sketch.bandRanges;
         return socket.send(message);
       }
 
@@ -185,12 +186,12 @@ export function createOutputSyncPlugin(options = {}) {
           url,
           onOpen: (link) => {
             link.send({ type: "hello", role: "controller" });
-            pushSketch(currentSketch());
+            pushAudioInput();
+            pushSketch(ctx.getRunningSketch?.() ?? currentSketch());
             pushState(true);
             pushOverlay();
             pushEditor();
             pushSlots();
-            pushAudioInput();
           },
           onMessage: handleMessage,
           onClose: () => {
