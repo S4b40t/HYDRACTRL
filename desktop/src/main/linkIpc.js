@@ -16,7 +16,11 @@ export function linkSenderRole(event, { editor, primary, settings, serverUrl, se
     }
     if (!serverUrl || page.origin !== new URL(serverUrl).origin) return null;
     if (sender === editor && ["/", "/app"].includes(page.pathname)) return "editor";
-    if (sender === primary && page.pathname === "/output" && page.search === "?primary") {
+    if (
+      sender === primary &&
+      page.pathname === "/output" &&
+      ["?primary", "?primary&alpha"].includes(page.search)
+    ) {
       return "primary";
     }
   } catch (_error) {

@@ -21,6 +21,10 @@ test("accepts only current desktop windows at their exact routes and origin", ()
   };
   expect(linkSenderRole(editor, windows)).toBe("editor");
   expect(linkSenderRole(primary, windows)).toBe("primary");
+  primary.senderFrame.url = serverUrl + "/output?primary&alpha";
+  expect(linkSenderRole(primary, windows)).toBe("primary");
+  primary.senderFrame.url = serverUrl + "/output?primary&unexpected";
+  expect(linkSenderRole(primary, windows)).toBeNull();
   expect(linkSenderRole(settings, windows)).toBe("settings");
   expect(linkSenderRole(sender(`${serverUrl}/output?primary`), windows)).toBeNull();
   expect(linkSenderRole({ ...editor, senderFrame: { url: serverUrl } }, windows)).toBeNull();
