@@ -42,6 +42,8 @@ test.each([
   ["s3.initCam(|", "initCam", 0],
   ["a.setSmooth(|", "setSmooth", 0],
   ["a.show(|", "show", -1],
+  ["midiParam('Level', |", "midiParam", 1],
+  ["a.setBandRanges(|", "setBandRanges", 0],
   ["[1, 2].fast().ease(|", "ease", 0],
   ["[1, 2].fit(0,|", "fit", 1],
 ])("resolves %s", (source, name, active) => {
@@ -61,6 +63,7 @@ test.each([
   "a.fft(|",
   "a.fft[0]|",
   "other.setSmooth(|",
+  "other.setBandRanges(|",
   "s4.initVideo(|",
   "initVideo(|",
   "s0['initVideo'](|",

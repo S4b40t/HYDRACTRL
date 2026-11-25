@@ -369,11 +369,10 @@ async function runCode(
     // Shared with the output page so every render head runs sketches identically
     const isMain = hydra === window.mainHydra;
     const sameSketch = runningSketch?.setup === setupCode && runningSketch?.main === mainCode;
-    const sketch = {
-      setup: setupCode,
-      main: mainCode,
-      parameterRun: !isMain && sameSketch ? runningSketch.parameterRun : nextParameterRun(),
-    };
+    const sketch =
+      !isMain && sameSketch
+        ? runningSketch
+        : { setup: setupCode, main: mainCode, parameterRun: nextParameterRun() };
     if (!isMain) {
       const result = await executeSketch(hydra, sketch);
       if (!result.success) throw new Error(result.message);
@@ -389,13 +388,15 @@ async function runCode(
         : await runWithRecovery(hydra, sketch, runningSketch);
       if (!result.success) throw new Error(result.message);
 
-      runningSketch = result.runId ? { ...sketch, runId: result.runId } : sketch;
+      runningSketch = { ...sketch };
+      if (result.runId) runningSketch.runId = result.runId;
+      if (result.bandRanges !== undefined) runningSketch.bandRanges = result.bandRanges;
       parameters.activate(sketch.parameterRun, slot, result.parameters);
       events.emit("sketch:run", runningSketch);
 
       const breakout = window.breakoutHydra;
       if (includeBreakout && breakout && !window.breakoutWindow?.closed) {
-        const breakoutResult = await executeSketch(breakout, sketch);
+        const breakoutResult = await executeSketch(breakout, runningSketch);
         if (breakoutResult.success) applySketchParameters(breakout, parameters.snapshot(), true);
         else showErrorNotification(breakoutResult.message);
       }
@@ -599,6 +600,11 @@ async function init() {
     const hydra = await initHydra();
     const renderLoop = createRenderLoop((dt) => hydra.tick(dt));
     renderLoop.start();
+    window.addEventListener("pagehide", (event) => {
+      if (event.persisted) return;
+      renderLoop.stop();
+      audioInputs.dispose();
+    });
 
     // Apply UI visibility state from localStorage right after panels are created.
     // Only applies when explicitly hidden, so first-time users see the UI.

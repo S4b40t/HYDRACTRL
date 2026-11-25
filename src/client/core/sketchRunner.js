@@ -71,6 +71,7 @@ function buildSketchFunction(code) {
   return new AsyncFunction(
     "hydra",
     "midiParam",
+    "a",
     `
       // Set global h variable to hydra for convenience
       globalThis.h = hydra;
@@ -118,11 +119,19 @@ export function checkSketchSyntax({ setup = "", main = "" } = {}) {
  * @param {{setup?: string, main?: string}} sketch
  * @returns {Promise<{success: true} | {success: false, message: string, error?: unknown}>}
  */
-export async function executeSketch(hydra, { setup = "", main = "", parameterRun } = {}) {
+export async function executeSketch(
+  hydra,
+  { setup = "", main = "", parameterRun, bandRanges } = {},
+) {
   const registry = createSketchParameters();
   const previousVideos = sourceVideos(hydra);
   try {
     runningParameters.delete(hydra);
+    const audio = hydra.synth?.a;
+    if (bandRanges === null) audio?.clearBandRanges?.();
+    else if (bandRanges !== undefined) audio?.setBandRanges?.(bandRanges);
+    const startingBands = audio?.getBandRanges?.();
+
     // Reset all outputs so leftovers from the previous sketch don't linger
     hydra.hush();
 
@@ -131,12 +140,16 @@ export async function executeSketch(hydra, { setup = "", main = "", parameterRun
     // A syntax error in the sketch throws here, at construction time
     const fn = buildSketchFunction(code);
 
-    const result = await fn(hydra, registry.register);
+    const result = await fn(hydra, registry.register, audio ?? globalThis.a);
     if (result?.success) {
       const parameters = registry.definitions();
-      if (!parameters.length) return { success: true };
-      runningParameters.set(hydra, { run: parameterRun, registry });
-      return { success: true, parameters };
+      const successfulRun = { success: true };
+      if (parameters.length) {
+        runningParameters.set(hydra, { run: parameterRun, registry });
+        successfulRun.parameters = parameters;
+      }
+      if (startingBands !== undefined) successfulRun.bandRanges = startingBands;
+      return successfulRun;
     }
     return {
       success: false,

@@ -12,7 +12,7 @@
  *
  * Protocol (JSON text frames):
  *   client -> hub   { type: "hello", role: "controller" | "output", primary? }
- *   controller -> hub { type: "sketch", setup, main, runId? } fan-out to outputs
+ *   controller -> hub { type: "sketch", setup, main, runId?, bandRanges? } fan-out to outputs
  *   controller -> hub { type: "state", nanoX?, nanoY? }      fan-out to outputs
  *   controller -> hub { type: "parameters", parameterRun, values } fan-out to matching outputs
  *   controller -> hub { type: "overlay", visible, slots?, blendMode?, opacity? } fan-out to outputs
@@ -22,7 +22,7 @@
  *   controller -> hub { type: "flash" }                       fan-out to outputs
  *   controller -> hub { type: "audio", deviceId, label }      fan-out to outputs
  *   controller -> hub { type: "run", id, setup, main }       to primary outputs only
- *   output -> hub   { type: "result", id, success, message? } to the controller that asked
+ *   output -> hub   { type: "result", id, success, message?, bandRanges? } to the controller that asked
  *   output -> hub   { type: "error", message }               fan-out to controllers
  *   hub -> controller { type: "outputs", count, primaries }  on every change
  *   hub -> controller { type: "output-error", message, outputId }
@@ -43,8 +43,10 @@ import {
   MAX_PARAMETER_NAME,
   normalizeParameter,
 } from "../client/core/sketchParameters.js";
+import { type BandRange, copyBandRanges } from "../spectralRanges";
 
 export type ClientRole = "controller" | "output";
+type BandRanges = BandRange[] | null;
 
 export interface HelloMessage {
   type: "hello";
@@ -60,6 +62,8 @@ export interface SketchMessage {
   /** The run that produced this sketch, when a primary output ran it first. */
   runId?: string;
   parameterRun?: string;
+  /** Custom ranges already in effect before a successful sketch ran. */
+  bandRanges?: BandRanges;
 }
 
 export interface RunMessage {
@@ -76,6 +80,7 @@ export interface ResultMessage {
   success: boolean;
   message?: string;
   parameters?: NonNullable<ReturnType<typeof normalizeParameter>>[];
+  bandRanges?: BandRanges;
 }
 
 export interface ParametersMessage {
@@ -292,6 +297,14 @@ export function parseIncomingMessage(raw: unknown): IncomingMessage | null {
       const sketch: SketchMessage = { type: "sketch", ...code };
       if (isRunId(message.runId)) sketch.runId = message.runId;
       if (isRunId(message.parameterRun)) sketch.parameterRun = message.parameterRun;
+      if (message.bandRanges !== undefined) {
+        try {
+          sketch.bandRanges =
+            message.bandRanges === null ? null : copyBandRanges(message.bandRanges);
+        } catch {
+          return null;
+        }
+      }
       return sketch;
     }
     case "run": {
@@ -312,6 +325,14 @@ export function parseIncomingMessage(raw: unknown): IncomingMessage | null {
           const definition = normalizeParameter(entry);
           return definition ? [definition] : [];
         });
+      }
+      if (message.success && message.bandRanges !== undefined) {
+        try {
+          result.bandRanges =
+            message.bandRanges === null ? null : copyBandRanges(message.bandRanges);
+        } catch {
+          return null;
+        }
       }
       return result;
     }
@@ -510,6 +531,7 @@ export function createOutputHub({ log = () => {} }: OutputHubOptions = {}) {
         client.primary = parsed.primary === true;
         if (parsed.role === "output") {
           log(`[output-hub] ${client.primary ? "primary " : ""}output ${id} connected`);
+          if (lastAudio) deliver(client, lastAudio);
           if (lastSketch) {
             deliver(client, lastSketch);
             if (client.primary) client.hasSketch = true;
@@ -519,7 +541,6 @@ export function createOutputHub({ log = () => {} }: OutputHubOptions = {}) {
           if (lastOverlay) deliver(client, lastOverlay);
           if (lastEditor) deliver(client, lastEditor);
           if (lastSlots) deliver(client, lastSlots);
-          if (lastAudio) deliver(client, lastAudio);
           announceOutputs();
         } else {
           deliver(client, outputsStatus());

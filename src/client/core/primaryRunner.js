@@ -30,7 +30,9 @@ function normalize(sketch) {
     setup: typeof sketch?.setup === "string" ? sketch.setup : "",
     main: typeof sketch?.main === "string" ? sketch.main : "",
   };
-  return sketch?.parameterRun ? { ...code, parameterRun: sketch.parameterRun } : code;
+  if (sketch?.parameterRun) code.parameterRun = sketch.parameterRun;
+  if (sketch?.bandRanges !== undefined) code.bandRanges = sketch.bandRanges;
+  return code;
 }
 
 /** Play a sketch, preserving the last successful render and MIDI targets on failure. */
@@ -75,7 +77,10 @@ export function createPrimaryRunner({
 
   async function runGuarded(sketch) {
     const result = await runWithRecovery(hydra, sketch, lastGood, execute, checkSyntax);
-    if (result.success) lastGood = sketch;
+    if (result.success) {
+      lastGood =
+        result.bandRanges === undefined ? sketch : { ...sketch, bandRanges: result.bandRanges };
+    }
     return result;
   }
 

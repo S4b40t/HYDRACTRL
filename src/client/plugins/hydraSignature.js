@@ -2,9 +2,9 @@ import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
 import hydraData from "../../data/hydra-functions.json" assert { type: "json" };
 
 const generators = new Set(["noise", "voronoi", "osc", "shape", "gradient", "solid", "src"]);
-const helpers = new Set(["render", "hush", "setResolution", "setFunction"]);
+const helpers = new Set(["render", "hush", "setResolution", "setFunction", "midiParam"]);
 const sources = new Set(["init", "initCam", "initScreen", "initVideo", "initImage"]);
-const audio = new Set(["setSmooth", "setCutoff", "setScale", "setBins", "show"]);
+const audio = new Set(["setSmooth", "setCutoff", "setScale", "setBins", "setBandRanges", "show"]);
 const arrays = new Set(["fast", "smooth", "ease", "offset", "fit"]);
 const transformMethods = new Set(["coord", "color", "combine", "combineCoord"]);
 const textures = new Set(
@@ -29,6 +29,16 @@ const corrections = {
   setCutoff: [{ name: "cutoff" }],
   setScale: [{ name: "scale" }],
   setBins: [{ name: "bins" }],
+  midiParam: [
+    { name: "name", documentation: "The name used to learn or restore the MIDI mapping." },
+    {
+      name: "options",
+      documentation: "Specify min, max and default. Smoothing, curve and takeover are optional.",
+    },
+  ],
+  setBandRanges: [
+    { name: "ranges", documentation: "Frequency pairs [low, high] in Hz, in a.fft order." },
+  ],
 };
 
 function memberName(read, member) {

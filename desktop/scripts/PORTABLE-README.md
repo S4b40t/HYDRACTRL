@@ -19,10 +19,14 @@ Open **Output Settings → Graphics** to choose **Let Windows decide**, **Power 
 
 Open **Output → Ableton Link…** to enable the desktop timing bridge. Link is disabled by default. The bundled **Link Test Peer** can drive a private test session with the supplied **Link Test Scene**. The [Windows Link test guide](LINK-WINDOWS-TEST.md) describes the sender and peer controls.
 
+## Spectral Analysis
+
+Open **Spectral Diagnostics** for the supplied sketches and WAV. Select an audio input or loopback in the editor and use the WAV with the [diagnostic guide](SPECTRAL_ANALYSIS.md). Use `a.clearBandRanges()` to return to legacy FFT bins.
+
 ## Storage and recovery
 
 The **portable-data** folder beside HYDRACTRL.exe holds the browser profile, scene banks, Setup, MIDI assignments, settings, logs, and default media. The renderer uses the fixed local origin **http://127.0.0.1:43129**. If that port is in use, close the other listener and retry. Moving or renaming the parent folder preserves the profile when you move its contents together.
 
-Before upgrading, export the banks and copy the Setup text as additional backups. To carry over the previous Signature Assist Portable's main profile, close both apps, then copy **signature-test-data/main** to **portable-data** in the new extraction before its first launch. Keep the original copy. For the old biotech or smoke modes, launch that mode in the original copy and export its banks and copy Setup. Those modes used different origins. Custom absolute media paths may need to be selected again. If the new extraction already has data, back it up before replacing any profile files.
+Before upgrading, export the banks and copy the Setup text as additional backups. For a Portable-to-Portable upgrade, extract beside the old copy and copy its entire **portable-data** folder before first launch. Keep the old installation and shortcut details until the new app and Spout pass a restart check. To carry over the previous Signature Assist Portable's main profile, close both apps, then copy **signature-test-data/main** to **portable-data** in the new extraction before its first launch. Keep the original copy. For the old biotech or smoke modes, launch that mode in the original copy and export its banks and copy Setup. Those modes used different origins. Custom absolute media paths may need to be selected again. If the new extraction already has data, back it up before replacing any profile files.
 
 See **BUILD-INFO.json** for the source revision and build version. This prerelease is unsigned.

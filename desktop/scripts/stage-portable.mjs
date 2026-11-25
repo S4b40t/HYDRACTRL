@@ -1,7 +1,7 @@
 /** Add Portable documentation and provenance to a freshly packaged Windows directory. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import asar from "@electron/asar";
@@ -33,11 +33,30 @@ for (const [from, to] of [
   ["desktop/scripts/HydractrlPortable.cmd", "HydractrlPortable.cmd"],
   ["desktop/scripts/PORTABLE-README.md", "START HERE.md"],
   ["docs/MIDI.md", "MIDI.md"],
+  ["docs/SPECTRAL_ANALYSIS.md", "SPECTRAL_ANALYSIS.md"],
   ["docs/SIGNATURE-ASSIST.md", "SIGNATURE-ASSIST.md"],
   ["LICENSE", "LICENSE.HYDRACTRL.txt"],
 ]) {
   copyFileSync(join(root, from), join(directory, to));
 }
+const diagnostics = join(directory, "Spectral Diagnostics");
+mkdirSync(diagnostics, { recursive: true });
+for (const name of [
+  "scene-a-frequency-separation.js",
+  "scene-b-overlapping-bands.js",
+  "scene-c-custom.js",
+  "scene-c-legacy.js",
+]) {
+  copyFileSync(join(root, "docs", "spectral-analysis", name), join(diagnostics, name));
+}
+execFileSync(
+  process.execPath,
+  [
+    join(root, "docs", "spectral-analysis", "generate-audio.mjs"),
+    join(diagnostics, "spectral-diagnostics.wav"),
+  ],
+  { stdio: "inherit" },
+);
 const sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], {
   cwd: root,
   encoding: "utf8",

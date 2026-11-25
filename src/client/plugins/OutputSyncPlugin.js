@@ -84,6 +84,7 @@ export function createOutputSyncPlugin(options = {}) {
         // Ran on the desktop app's own output first, which then skips it
         if (sketch.runId) message.runId = sketch.runId;
         if (sketch.parameterRun) message.parameterRun = sketch.parameterRun;
+        if (sketch.bandRanges !== undefined) message.bandRanges = sketch.bandRanges;
         return socket.send(message);
       }
 
@@ -197,12 +198,12 @@ export function createOutputSyncPlugin(options = {}) {
           url,
           onOpen: (link) => {
             link.send({ type: "hello", role: "controller" });
+            pushAudioInput();
             pushCurrentSketch();
             pushState(true);
             pushOverlay();
             pushEditor();
             pushSlots();
-            pushAudioInput();
           },
           onMessage: handleMessage,
           onClose: () => {

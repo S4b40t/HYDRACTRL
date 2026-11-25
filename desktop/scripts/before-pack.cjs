@@ -21,6 +21,6 @@ exports.default = async function beforePack(context) {
   execFileSync(
     "bun",
     ["scripts/build-server.mjs", "--platform", platform, "--arch", arch, "--out", out],
-    { cwd: desktopDir, stdio: "inherit", shell: process.platform === "win32" },
+    { cwd: desktopDir, stdio: "inherit" },
   );
 };

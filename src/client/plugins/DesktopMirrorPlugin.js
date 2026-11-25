@@ -253,9 +253,10 @@ export function createDesktopMirrorPlugin(options = {}) {
           return execute(ctx.hydra, sketch);
         }
         if (result.success) {
-          return result.parameters
-            ? { success: true, runId: id, parameters: result.parameters }
-            : { success: true, runId: id };
+          const run = { success: true, runId: id };
+          if (result.parameters) run.parameters = result.parameters;
+          if (result.bandRanges !== undefined) run.bandRanges = result.bandRanges;
+          return run;
         }
         return { success: false, message: result.message || "The output couldn't run the sketch" };
       }
@@ -299,6 +300,7 @@ export function createDesktopMirrorPlugin(options = {}) {
       const offRun = ctx.events.on("sketch:run", (sketch) => {
         lastGood = { setup: sketch?.setup || "", main: sketch?.main || "" };
         if (sketch?.parameterRun) lastGood.parameterRun = sketch.parameterRun;
+        if (sketch?.bandRanges !== undefined) lastGood.bandRanges = sketch.bandRanges;
       });
 
       const stallTimer = timers.setInterval(() => {

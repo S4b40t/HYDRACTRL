@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { REMEMBERED_RUNS, createPrimaryRunner } from "./primaryRunner.js";
+import { applySketchParameters, readSketchParameters } from "./sketchRunner.js";
 
 /** An execute stand-in: records what ran, fails sketches that contain "boom". */
 function createFakeExecute(log, { delays = {} } = {}) {
@@ -103,6 +104,56 @@ describe("createPrimaryRunner", () => {
     await runner.runSketch({ main: "s0" }, { runId: "r0" });
     await runner.runSketch({ main: "s1" }, { runId: "r1" });
     expect(log).toEqual(["start s0", "end s0"]);
+  });
+
+  test("replays inherited ranges and MIDI values on a new renderer and after a failing run", async () => {
+    function createHydra() {
+      let ranges = null;
+      const audio = {
+        setBandRanges: (next) => {
+          ranges = next;
+        },
+        clearBandRanges: () => {
+          ranges = null;
+        },
+        getBandRanges: () => ranges,
+      };
+      return { synth: { a: audio }, hush() {} };
+    }
+    const hydra = createHydra();
+    const runner = createPrimaryRunner({ hydra });
+    const initial = await runner.run("r1", { main: "a.setBandRanges([[20, 80]])" });
+    expect(initial).toEqual({ success: true, bandRanges: null });
+    const scene = {
+      setup: 'const level = midiParam("Level", { min: 0, max: 1, default: 0.5 });',
+      main: 'if (level() !== 0.5 || a.getBandRanges()?.[0][0] !== 20) throw Error("Missing baseline")',
+      parameterRun: "midi-r2",
+    };
+    const inherited = await runner.run("r2", scene);
+    expect(inherited).toEqual({
+      success: true,
+      bandRanges: [[20, 80]],
+      parameters: [expect.objectContaining({ name: "Level", default: 0.5 })],
+    });
+    const midi = { parameterRun: "midi-r2", values: [["Level", 0.75]] };
+    expect(applySketchParameters(hydra, midi, true)).toBe(true);
+    const replacement = createHydra();
+    const output = createPrimaryRunner({ hydra: replacement });
+    expect(await output.runSketch(runner.getLastGood())).toEqual(inherited);
+    expect(applySketchParameters(replacement, midi, true)).toBe(true);
+    expect(readSketchParameters(replacement)).toEqual(midi);
+    const failed = await runner.run("r3", {
+      setup: 'midiParam("Other", { min: 0, max: 1, default: 0 });',
+      main: 'a.clearBandRanges(); throw Error("Failed")',
+      parameterRun: "midi-r3",
+    });
+    expect(failed).toEqual({ success: false, message: "Failed" });
+    expect(hydra.synth.a.getBandRanges()).toEqual([[20, 80]]);
+    expect(readSketchParameters(hydra)).toEqual(midi);
+    const legacy = await runner.run("r4", { main: "a.clearBandRanges()" });
+    expect(legacy).toEqual({ success: true, bandRanges: [[20, 80]] });
+    expect(hydra.synth.a.getBandRanges()).toBeNull();
+    expect(readSketchParameters(hydra)).toBeNull();
   });
 
   test("keeps going after a sketch throws past executeSketch", async () => {

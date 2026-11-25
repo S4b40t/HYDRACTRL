@@ -69,11 +69,10 @@ export function buildServer({
   const target = bunTargetFor(platform, arch);
   const binaryName = platform === "win32" ? "hydractrl.exe" : "hydractrl";
   const binaryPath = join(out, binaryName);
-  const shell = process.platform === "win32";
 
   if (!skipClient) {
     log("building the client bundles");
-    exec("bun", ["run", "build:client"], { cwd: REPO_ROOT, stdio: "inherit", shell });
+    exec("bun", ["run", "build:client"], { cwd: REPO_ROOT, stdio: "inherit" });
   }
 
   fs.rmSync(out, { recursive: true, force: true });
@@ -83,7 +82,7 @@ export function buildServer({
   exec(
     "bun",
     ["build", "src/index.ts", "--compile", `--target=${target}`, "--outfile", binaryPath],
-    { cwd: REPO_ROOT, stdio: "inherit", shell },
+    { cwd: REPO_ROOT, stdio: "inherit" },
   );
 
   const publicDir = join(out, "hydractrl-public");
