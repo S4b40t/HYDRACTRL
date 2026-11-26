@@ -8,6 +8,11 @@ version and the desktop app share one version number; see
 
 ## [Unreleased]
 
+### Added
+
+- MIDI parameters accept a custom JavaScript easing function for smoothed
+  transitions, including functions declared in Setup.
+
 ## [1.2.2-portable.unified.1] - 2026-11-25
 
 - Integrate configurable spectral analysis and ship diagnostic sketches and WAV.

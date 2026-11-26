@@ -80,29 +80,50 @@ export function createSketchParameters(now = () => performance.now()) {
   function register(name, options) {
     if (!registering)
       throw new Error("Register MIDI parameters while the sketch is running its setup.");
-    const definition = normalizeParameter({ ...options, name });
+    const definitionOptions = { ...options, name };
+    const { easing } = definitionOptions;
+    const definition = normalizeParameter(definitionOptions);
     if (!definition) throw new Error(`Invalid MIDI parameter definition for "${name}".`);
+    if (easing !== undefined && typeof easing !== "function")
+      throw new Error(`Invalid MIDI parameter easing for "${name}": expected a function.`);
     if (parameters.has(name)) throw new Error(`Duplicate MIDI parameter "${name}".`);
     if (parameters.size >= MAX_PARAMETERS)
       throw new Error(`A sketch can register ${MAX_PARAMETERS} MIDI parameters.`);
     let from = definition.default;
     let target = from;
     let started = now();
-    const get = () => {
-      if (!definition.smoothing || from === target) return target;
-      const progress = clamp((now() - started) / definition.smoothing, 0, 1);
-      return from + (target - from) * progress;
+    const { min, max, smoothing } = definition;
+    const evaluate = (time) => {
+      const progress = (time - started) / smoothing;
+      if (progress <= 0) return from;
+      if (progress >= 1) return target;
+      const distance = target - from;
+      if (!easing) return from + distance * progress;
+
+      // The callback stays in this renderer's closure. A bad sample falls
+      // back to linear progress without logging from the render loop.
+      try {
+        const eased = easing(progress);
+        if (Number.isFinite(eased)) return clamp(from + distance * eased, min, max);
+        if (eased instanceof Promise) eased.catch(() => {});
+      } catch {
+        // Keep the transition running if a callback throws.
+      }
+      return from + distance * progress;
     };
+    const get = () => (smoothing && from !== target ? evaluate(now()) : target);
     parameters.set(name, {
       definition,
       get,
       getTarget: () => target,
       set(value, immediate) {
-        const next = clamp(value, definition.min, definition.max);
+        const next = clamp(value, min, max);
         if (next === target && !immediate) return;
-        from = immediate ? next : get();
+        const time = now();
+        if (immediate || !smoothing) from = next;
+        else if (from !== target) from = evaluate(time);
         target = next;
-        started = now();
+        started = time;
       },
     });
     return get;

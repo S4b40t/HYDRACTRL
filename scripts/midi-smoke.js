@@ -96,6 +96,9 @@ try {
   await learn("First · Unassigned", [0xb0, 31, 100]);
 
   const head = await context.newPage();
+  const outputSocket = head.waitForEvent("websocket", (socket) =>
+    socket.url().endsWith("/ws/output"),
+  );
   await head.goto(`${url}/output?primary`);
   await scene(head, "First");
   const initialRuns = await page.evaluate(() => window.midiRuns);
@@ -225,6 +228,84 @@ try {
     ]),
     [2, 4],
   );
+
+  const setup = await readFile(new URL("../docs/midi-easing/setup.js", import.meta.url), "utf8");
+  const sketch = await readFile(new URL("../docs/midi-easing/sketch.js", import.meta.url), "utf8");
+  await page.evaluate(
+    ({ setup, sketch }) => {
+      localStorage.setItem("hydractrl-setup-code", setup);
+      localStorage.setItem(
+        "hydractrl-slot-bank-0-slot-1",
+        `globalThis.midiScene = "Easing diagnostic";\n${sketch}`,
+      );
+    },
+    { setup, sketch },
+  );
+  await page.reload();
+  await midiReady();
+  await openSystem();
+  await page.getByRole("combobox", { name: "MIDI input" }).selectOption(genericId);
+  await send([0x90, 49, 100]);
+  await scene(page, "Easing diagnostic");
+  await scene(head, "Easing diagnostic");
+  await page.getByText("MIDI mappings", { exact: true }).click();
+  const labels = ["Linear", "Smoothstep", "Ease in", "Ease out", "Ease out power 4", "Elastic"];
+  for (const [index, label] of labels.entries()) {
+    await learn(`${label} · Unassigned`, [0xb0, 40 + index, 0]);
+  }
+
+  // Hold both transition clocks still while the numeric target is delivered.
+  // Advance them together to observe the same progress on both renderers.
+  const values = (renderer) =>
+    renderer.evaluate(() => window.midiEasingDiagnostic.map((get) => get()));
+  for (const renderer of [page, head]) {
+    await renderer.evaluate(() => {
+      window.midiEasingTime = performance.now();
+      performance.now = () => window.midiEasingTime;
+    });
+  }
+  const advance = (ms) =>
+    Promise.all(
+      [page, head].map((renderer) =>
+        renderer.evaluate((ms) => {
+          window.midiEasingTime += ms;
+        }, ms),
+      ),
+    );
+  for (let index = 0; index < labels.length; index++) await send([0xb0, 40 + index, 25]);
+  const target = 76 / 127;
+  const delivered = (await outputSocket).waitForEvent("framereceived", ({ payload }) => {
+    const message = JSON.parse(payload);
+    return (
+      message.type === "parameters" &&
+      message.values.some(([name, value]) => name === "Elastic" && value === target)
+    );
+  });
+  for (let index = 0; index < labels.length; index++) await send([0xb0, 40 + index, 76]);
+  await delivered;
+  assert.deepEqual(await values(page), Array(6).fill(0.2));
+  await advance(200);
+  const between = 0.2 + (target - 0.2) * 0.5;
+  const closeTo = (actual, expected) => Math.abs(actual - expected) < 1e-9;
+  const editorValues = await values(page);
+  assert.ok(closeTo(editorValues[0], target));
+  assert.ok(closeTo(editorValues[1], between));
+  assert.ok(closeTo(editorValues[2], 0.2 + (target - 0.2) / 4));
+  assert.ok(closeTo(editorValues[3], target));
+  assert.ok(closeTo(editorValues[4], 0.2 + (target - 0.2) * (15 / 16)));
+  assert.ok(editorValues[5] > target && editorValues[5] <= 1);
+  assert.deepEqual(await values(head), editorValues);
+  await advance(400);
+  assert.deepEqual(await values(page), Array(6).fill(target));
+  assert.deepEqual(await values(head), Array(6).fill(target));
+  await send([0x90, 48, 100]);
+  await scene(page, "First");
+  await scene(head, "First");
+  await send([0x90, 49, 100]);
+  await scene(page, "Easing diagnostic");
+  await scene(head, "Easing diagnostic");
+  assert.deepEqual(await values(page), Array(6).fill(0.2));
+  assert.deepEqual(await values(head), Array(6).fill(0.2));
   console.log("MIDI browser smoke passed");
 } finally {
   await browser.close();
