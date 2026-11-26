@@ -69,6 +69,7 @@ Optional settings are:
 | Option | Default | Behavior |
 | --- | --- | --- |
 | `smoothing` | `0` | Time in milliseconds to reach the new target from the current value. |
+| `easing` | Linear | Optional JavaScript function that shapes progress during a smoothed transition. |
 | `curve` | `1` | Exponent on the normalized CC value. For example, `2` gives finer control at the low end. |
 | `takeover` | `true` | Catch or cross the current value before the control changes the parameter. Set to `false` for immediate absolute control. |
 
@@ -90,6 +91,52 @@ using the sketch execution's ID. The renderer updates its existing getters.
 The browser's local renderer, breakout, and connected output pages can use the
 same parameters. MIDI input and navigation are managed by the HYDRACTRL
 application.
+
+## Shape the transition
+
+`curve` maps the physical CC position to a target. `smoothing` sets how long the
+transition to that target takes, from 0 to 60,000 ms. `easing` shapes how the
+value moves over that time. At `smoothing: 0`, changes are immediate.
+
+Declare reusable functions in **Setup**:
+
+```js
+const smoothstep = t => t * t * (3 - 2 * t);
+const easeIn = t => t ** 2;
+const easeOut = (t, power = 2) => 1 - (1 - t) ** power;
+const elastic = t => 1 - (1 - t) ** 3 * Math.cos(3 * Math.PI * t);
+```
+
+Use them in the **Sketch** tab:
+
+```js
+const range = { default: 0.2, min: 0, max: 1, smoothing: 200 };
+const linear = midiParam("Linear", range);
+const smooth = midiParam("Smoothstep", { ...range, easing: smoothstep });
+const slowStart = midiParam("Ease in", { ...range, easing: easeIn });
+const fastStart = midiParam("Ease out", { ...range, easing: easeOut });
+const rotation = midiParam("Rotation", {
+  ...range, default: 0, min: -1, easing: t => easeOut(t, 4),
+});
+const bounce = midiParam("Elastic", { ...range, smoothing: 600, easing: elastic });
+```
+
+Use pure, synchronous callbacks that return a finite number. HYDRACTRL passes
+normalized progress inside the transition. It uses the exact start and target
+values at the endpoints. A throw or invalid return uses linear progress for that
+sample. For an overshoot, aim at a target inside the parameter range, such as
+0.6 with bounds of 0 and 1. The output stays within `min` and `max`.
+Each renderer runs the same Setup and Sketch to create its own callback.
+
+When a knob sends a new target, the transition starts from the current
+interpolated value. Continuous turns repeatedly revisit the start of the
+easing curve. Long durations with ease-in or smoothstep can trail the knob
+until it stops. Shorter durations, linear easing, or ease-out respond faster
+under continuous movement. A direction reversal keeps the value continuous,
+while its speed can change immediately.
+
+The [diagnostic sketch](./midi-easing/README.md) displays six independently
+mapped parameters for side-by-side checks.
 
 ## Verification
 
