@@ -110,8 +110,7 @@ test("shows a registered combineCoord signature in a multiline Hydra chain", () 
   };
   const editor = { getCurrentTab: () => "main", getTabCode: () => "" };
   let transforms = {};
-  const getTransform = (name) => transforms[name];
-  const extension = signatureExtension(editor, getTransform);
+  const extension = signatureExtension(editor, () => transforms);
   const source = "src(o1).contrast(2).rowStretch(\n  noise(),\n  width,\n  rows\n).out(o0)";
   const state = EditorState.create({
     doc: source,

@@ -201,6 +201,7 @@ function isShadowed(index, name, position) {
 /** Return undefined for an unclaimed name, null for a blocked name, or a signature hint. */
 export function createCustomSignatureResolver(editor) {
   const cache = new Map();
+  let activeTab;
   let activeDoc;
   let activeTree;
 
@@ -211,11 +212,12 @@ export function createCustomSignatureResolver(editor) {
     const tree = syntaxTree(state);
     if (tree.length !== state.doc.length) return null;
 
-    if (state.doc !== activeDoc || tree !== activeTree) {
+    if (tab !== activeTab || state.doc !== activeDoc || tree !== activeTree) {
       const source = state.doc.toString();
       if (cache.get(tab)?.source !== source) {
         cache.set(tab, { source, ...indexCustomSignatures(source, tree) });
       }
+      activeTab = tab;
       activeDoc = state.doc;
       activeTree = tree;
     }
@@ -240,7 +242,7 @@ export function createCustomSignatureResolver(editor) {
       return signature.hint;
     }
 
-    return (name, position) => {
+    function lookup(name, position) {
       if (isShadowed(current, name, position)) return null;
       if (current.bindings.has(name) && inactive.bindings.has(name)) return null;
       if (current.bindings.has(name)) {
@@ -252,6 +254,14 @@ export function createCustomSignatureResolver(editor) {
       return signature && (tab === "main" || signature.from === 0)
         ? hintFor(signature, inactive)
         : null;
+    }
+
+    lookup.names = function* () {
+      yield* current.bindings.keys();
+      for (const name of inactive.bindings.keys()) {
+        if (!current.bindings.has(name)) yield name;
+      }
     };
+    return lookup;
   };
 }

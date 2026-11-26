@@ -90,23 +90,16 @@ function transformSignature(name, transform) {
   return { name, params };
 }
 
-function callableSignature(state, args, custom, getTransform) {
-  const callee = args.parent.firstChild;
-  if (args.parent.getChild("?.")) return null;
-  if (callee.name === "VariableName") {
-    const name = state.sliceDoc(callee.from, callee.to);
-    const hint = custom(name, callee.from);
-    if (hint !== undefined)
-      return hint && { name, params: hint.params, description: hint.description };
-    if (generators.has(name) || helpers.has(name)) return nativeSignature(name);
-    const transform = getTransform(name);
-    return transform?.type === "src" ? transformSignature(name, transform) : null;
-  }
+export function globalSignature(name, hint, getTransform) {
+  if (hint !== undefined)
+    return hint && { name, params: hint.params, description: hint.description };
+  if (generators.has(name) || helpers.has(name)) return nativeSignature(name);
+  const transform = getTransform(name);
+  return transform?.type === "src" ? transformSignature(name, transform) : null;
+}
 
+export function memberSignature(state, receiver, name, custom, getTransform) {
   const read = (from, to) => state.sliceDoc(from, to);
-  const name = memberName(read, callee);
-  if (!name) return null;
-  const receiver = callee.firstChild;
   if (receiver.name === "VariableName") {
     const binding = state.sliceDoc(receiver.from, receiver.to);
     if (custom(binding, receiver.from) !== undefined) return null;
@@ -134,6 +127,23 @@ function callableSignature(state, args, custom, getTransform) {
     return nativeSignature(name);
   }
   return null;
+}
+
+function callableSignature(state, args, custom, getTransform) {
+  const callee = args.parent.firstChild;
+  if (args.parent.getChild("?.")) return null;
+  if (callee.name === "VariableName") {
+    const name = state.sliceDoc(callee.from, callee.to);
+    return globalSignature(name, custom(name, callee.from), getTransform);
+  }
+  const name = memberName((from, to) => state.sliceDoc(from, to), callee);
+  return name ? memberSignature(state, callee.firstChild, name, custom, getTransform) : null;
+}
+
+export function parameterLabel(parameter) {
+  return Object.hasOwn(parameter, "default")
+    ? `${parameter.name} = ${parameter.default}`
+    : parameter.name;
 }
 
 function nativeSignature(name) {
