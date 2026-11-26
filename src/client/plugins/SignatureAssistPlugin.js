@@ -1,8 +1,9 @@
 import { syntaxTree } from "@codemirror/language";
 import { StateEffect, StateField } from "@codemirror/state";
 import { EditorView, showTooltip } from "@codemirror/view";
+import { hydraCompletionScope } from "../../utils/hydraCompletions.js";
 import { createCustomSignatureResolver } from "./customSignatures.js";
-import { hydraCallAtCursor } from "./hydraSignature.js";
+import { hydraCallAtCursor, parameterLabel } from "./hydraSignature.js";
 
 const dismiss = StateEffect.define();
 
@@ -28,14 +29,12 @@ const signatureTheme = EditorView.baseTheme({
   ".cm-signature-assist strong": { textDecoration: "underline" },
 });
 
-function parameterLabel(parameter) {
-  return Object.hasOwn(parameter, "default")
-    ? `${parameter.name} = ${parameter.default}`
-    : parameter.name;
-}
-
-export function signatureExtension(editor, getTransform) {
+export function signatureExtension(editor, getTransforms = () => undefined) {
   const resolve = createCustomSignatureResolver(editor);
+  const getTransform = (name) => {
+    const transforms = getTransforms();
+    return transforms && Object.hasOwn(transforms, name) ? transforms[name] : undefined;
+  };
   const signature = StateField.define({
     create: () => null,
     update(previous, transaction) {
@@ -109,6 +108,7 @@ export function signatureExtension(editor, getTransform) {
 
   return [
     signature,
+    hydraCompletionScope.of({ resolve, getTransforms }),
     EditorView.focusChangeEffect.of((_state, focused) => (focused ? null : dismiss.of(null))),
     EditorView.domEventObservers({
       keydown(event, view) {
@@ -128,10 +128,7 @@ export function createSignatureAssistPlugin() {
     setup({ editor, hydra, isMobile }) {
       if (isMobile) return;
       return editor.addExtension(
-        signatureExtension(editor, (name) => {
-          const transforms = hydra?.generator?.glslTransforms;
-          return transforms && Object.hasOwn(transforms, name) ? transforms[name] : undefined;
-        }),
+        signatureExtension(editor, () => hydra?.generator?.glslTransforms),
       );
     },
   };
