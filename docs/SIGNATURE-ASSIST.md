@@ -1,6 +1,6 @@
 # Signature Assist for Hydra
 
-The bundled editor plugin shows a call signature and highlights the current parameter using CodeMirror’s JavaScript syntax tree. Escape dismisses the hint. The editor’s autocomplete keeps its existing keybindings.
+The bundled editor plugin shows a call signature and highlights the current parameter using CodeMirror’s JavaScript syntax tree. Escape dismisses the hint. Tab accepts a selected autocomplete suggestion and otherwise indents. See the [editor development report](EDITOR-QOL.md) for the completion rules and browser checks.
 
 ## Catalog audit
 
