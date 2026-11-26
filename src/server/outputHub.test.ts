@@ -37,6 +37,39 @@ describe("parseIncomingMessage", () => {
     expect(parseIncomingMessage(SKETCH)).toEqual(SKETCH);
   });
 
+  test("copies display metadata from a successful primary result", () => {
+    const result = {
+      type: "result",
+      id: RUN.id,
+      success: true,
+      transforms: {
+        fold: {
+          type: "coord",
+          glsl: "ignored shader source",
+          inputs: [
+            { name: "amount", default: 0.5 },
+            { name: "input", default: [1, 2] },
+          ],
+        },
+        invalid: { type: "unknown", inputs: [] },
+        malformed: { type: "coord", inputs: [{ name: 1 }] },
+      },
+    };
+    expect(parseIncomingMessage(result)).toEqual({
+      type: "result",
+      id: RUN.id,
+      success: true,
+      transforms: {
+        fold: { type: "coord", inputs: [{ name: "amount", default: 0.5 }, { name: "input" }] },
+      },
+    });
+    expect(parseIncomingMessage({ ...result, success: false })).toEqual({
+      type: "result",
+      id: RUN.id,
+      success: false,
+    });
+  });
+
   test("validates optional range baselines on sketch and successful result messages", () => {
     const bandRanges = [
       [50, 150],

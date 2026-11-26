@@ -1,10 +1,11 @@
 import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
 import hydraData from "../../data/hydra-functions.json" assert { type: "json" };
+import { portableGlobalSignature, portableMember } from "./portableSignatures.js";
 
 const generators = new Set(["noise", "voronoi", "osc", "shape", "gradient", "solid", "src"]);
-const helpers = new Set(["render", "hush", "setResolution", "setFunction", "midiParam"]);
+const helpers = new Set(["render", "hush", "setResolution", "setFunction"]);
 const sources = new Set(["init", "initCam", "initScreen", "initVideo", "initImage"]);
-const audio = new Set(["setSmooth", "setCutoff", "setScale", "setBins", "setBandRanges", "show"]);
+const audio = new Set(["setSmooth", "setCutoff", "setScale", "setBins", "show"]);
 const arrays = new Set(["fast", "smooth", "ease", "offset", "fit"]);
 const transformMethods = new Set(["coord", "color", "combine", "combineCoord"]);
 const textures = new Set(
@@ -29,16 +30,6 @@ const corrections = {
   setCutoff: [{ name: "cutoff" }],
   setScale: [{ name: "scale" }],
   setBins: [{ name: "bins" }],
-  midiParam: [
-    { name: "name", documentation: "The name used to learn or restore the MIDI mapping." },
-    {
-      name: "options",
-      documentation: "Specify min, max and default. Smoothing, curve and takeover are optional.",
-    },
-  ],
-  setBandRanges: [
-    { name: "ranges", documentation: "Frequency pairs [low, high] in Hz, in a.fft order." },
-  ],
 };
 
 function memberName(read, member) {
@@ -90,15 +81,19 @@ function transformSignature(name, transform) {
   return { name, params };
 }
 
-export function globalSignature(name, hint, getTransform) {
+export function globalSignature(name, hint, getTransform, capabilities) {
   if (hint !== undefined)
     return hint && { name, params: hint.params, description: hint.description };
+  const portable = portableGlobalSignature(name, capabilities);
+  if (portable) return { name, ...portable };
   if (generators.has(name) || helpers.has(name)) return nativeSignature(name);
   const transform = getTransform(name);
   return transform?.type === "src" ? transformSignature(name, transform) : null;
 }
 
-export function memberSignature(state, receiver, name, custom, getTransform) {
+export function memberSignature(state, receiver, name, custom, getTransform, capabilities) {
+  const portable = portableMember(state, receiver, name, custom, capabilities);
+  if (portable?.params) return { name, ...portable };
   const read = (from, to) => state.sliceDoc(from, to);
   if (receiver.name === "VariableName") {
     const binding = state.sliceDoc(receiver.from, receiver.to);
@@ -129,15 +124,17 @@ export function memberSignature(state, receiver, name, custom, getTransform) {
   return null;
 }
 
-function callableSignature(state, args, custom, getTransform) {
+function callableSignature(state, args, custom, getTransform, capabilities) {
   const callee = args.parent.firstChild;
   if (args.parent.getChild("?.")) return null;
   if (callee.name === "VariableName") {
     const name = state.sliceDoc(callee.from, callee.to);
-    return globalSignature(name, custom(name, callee.from), getTransform);
+    return globalSignature(name, custom(name, callee.from), getTransform, capabilities);
   }
   const name = memberName((from, to) => state.sliceDoc(from, to), callee);
-  return name ? memberSignature(state, callee.firstChild, name, custom, getTransform) : null;
+  return name
+    ? memberSignature(state, callee.firstChild, name, custom, getTransform, capabilities)
+    : null;
 }
 
 export function parameterLabel(parameter) {
@@ -150,7 +147,12 @@ function nativeSignature(name) {
   return { name, params: corrections[name] ?? hydraData.functions[name].params };
 }
 
-export function hydraCallAtCursor(state, custom = () => undefined, getTransform = () => undefined) {
+export function hydraCallAtCursor(
+  state,
+  custom = () => undefined,
+  getTransform = () => undefined,
+  capabilities = undefined,
+) {
   const { head, empty } = state.selection.main;
   if (!empty || state.selection.ranges.length !== 1 || !syntaxTreeAvailable(state, head))
     return null;
@@ -163,7 +165,7 @@ export function hydraCallAtCursor(state, custom = () => undefined, getTransform 
     if (close?.name === ")" && head >= close.to) continue;
     if (node.parent?.name !== "CallExpression" || node.firstChild?.name !== "(") return null;
 
-    const signature = callableSignature(state, node, custom, getTransform);
+    const signature = callableSignature(state, node, custom, getTransform, capabilities);
     if (!signature) return null;
 
     let active = 0;

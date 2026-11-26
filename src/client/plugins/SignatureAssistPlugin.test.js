@@ -16,7 +16,12 @@ test("reuses the mounted theme while keeping each signature extension's state in
 function resolve(source, extensions = [javascript()]) {
   const anchor = source.indexOf("|");
   const doc = source.replace("|", "");
-  return hydraCallAtCursor(EditorState.create({ doc, selection: { anchor }, extensions }));
+  return hydraCallAtCursor(
+    EditorState.create({ doc, selection: { anchor }, extensions }),
+    undefined,
+    undefined,
+    { midi: true, audio: { setBandRanges() {} } },
+  );
 }
 
 test.each([

@@ -32,6 +32,7 @@ import { buildOutputSocketUrl, detectOutputServer } from "./core/outputProtocol.
 import { createPrimaryRunner } from "./core/primaryRunner.js";
 import { createRenderLoop } from "./core/renderLoop.js";
 import { applySketchParameters, executeSketch, readSketchParameters } from "./core/sketchRunner.js";
+import { copyTransformMetadata } from "./core/transformMetadata.js";
 import { readSketchFromHash } from "./plugins/UrlSharePlugin.js";
 
 // hydra-synth expects a Node-style global
@@ -211,6 +212,7 @@ async function init() {
       if (!result.success) reply.message = result.message;
       if (result.bandRanges !== undefined) reply.bandRanges = result.bandRanges;
       if (result.parameters) reply.parameters = result.parameters;
+      if (result.success) reply.transforms = copyTransformMetadata(hydra.generator?.glslTransforms);
       socket?.send(reply);
     }
 

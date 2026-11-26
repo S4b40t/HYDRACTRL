@@ -22,7 +22,7 @@
  *   controller -> hub { type: "flash" }                       fan-out to outputs
  *   controller -> hub { type: "audio", deviceId, label }      fan-out to outputs
  *   controller -> hub { type: "run", id, setup, main }       to primary outputs only
- *   output -> hub   { type: "result", id, success, message?, bandRanges? } to the controller that asked
+ *   output -> hub   { type: "result", id, success, message?, bandRanges?, transforms? } to the requester
  *   output -> hub   { type: "error", message }               fan-out to controllers
  *   hub -> controller { type: "outputs", count, primaries }  on every change
  *   hub -> controller { type: "output-error", message, outputId }
@@ -43,6 +43,7 @@ import {
   MAX_PARAMETER_NAME,
   normalizeParameter,
 } from "../client/core/sketchParameters.js";
+import { copyTransformMetadata } from "../client/core/transformMetadata.js";
 import { type BandRange, copyBandRanges } from "../spectralRanges";
 
 export type ClientRole = "controller" | "output";
@@ -80,6 +81,7 @@ export interface ResultMessage {
   success: boolean;
   message?: string;
   parameters?: NonNullable<ReturnType<typeof normalizeParameter>>[];
+  transforms?: NonNullable<ReturnType<typeof copyTransformMetadata>>;
   bandRanges?: BandRanges;
 }
 
@@ -325,6 +327,9 @@ export function parseIncomingMessage(raw: unknown): IncomingMessage | null {
           const definition = normalizeParameter(entry);
           return definition ? [definition] : [];
         });
+      }
+      if (result.success && message.transforms !== undefined) {
+        result.transforms = copyTransformMetadata(message.transforms);
       }
       if (message.success && message.bandRanges !== undefined) {
         try {

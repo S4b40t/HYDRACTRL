@@ -6,6 +6,7 @@ import {
   memberSignature,
   parameterLabel,
 } from "../client/plugins/hydraSignature.js";
+import { portableCompletionNames, portableMember } from "../client/plugins/portableSignatures.js";
 import hydraData from "../data/hydra-functions.json" assert { type: "json" };
 import { inJavaScriptLiteral } from "./editorDelimiters.js";
 
@@ -89,9 +90,11 @@ export function hydraCompletions(context) {
   if (scope && !lookup) return null;
   const custom = lookup ?? noBinding;
   const transforms = scope?.getTransforms();
+  const capabilities = scope?.getCapabilities?.();
   const getTransform = (name) =>
     transforms && Object.hasOwn(transforms, name) ? transforms[name] : undefined;
   const names = new Set([...catalogNames, ...Object.keys(transforms ?? {})]);
+  if (capabilities) for (const name of portableCompletionNames) names.add(name);
   if (!member) {
     for (const name of callbacks) names.add(name);
     if (lookup) for (const name of lookup.names()) names.add(name);
@@ -104,13 +107,18 @@ export function hydraCompletions(context) {
     if (!name.toLowerCase().startsWith(prefix)) continue;
     const binding = member ? undefined : custom(name, match.from);
     const signature = member
-      ? memberSignature(state, receiver, name, custom, getTransform)
-      : globalSignature(name, binding, getTransform);
+      ? memberSignature(state, receiver, name, custom, getTransform, capabilities)
+      : globalSignature(name, binding, getTransform, capabilities);
+    const property =
+      member && name === "hydractrlLink"
+        ? portableMember(state, receiver, name, custom, capabilities)
+        : null;
     const value = member
-      ? name === "fft" &&
-        receiver.name === "VariableName" &&
-        state.sliceDoc(receiver.from, receiver.to) === "a" &&
-        custom("a", receiver.from) === undefined
+      ? property ||
+        (name === "fft" &&
+          receiver.name === "VariableName" &&
+          state.sliceDoc(receiver.from, receiver.to) === "a" &&
+          custom("a", receiver.from) === undefined)
       : binding === undefined &&
         (catalog[name]?.syntaxType === "global" || callbacks.includes(name));
     const option = optionFor(
@@ -118,7 +126,7 @@ export function hydraCompletions(context) {
       signature,
       member,
       value,
-      binding === undefined ? catalog[name] : undefined,
+      binding === undefined ? (property ?? catalog[name]) : undefined,
     );
     if (option) options.push(option);
   }

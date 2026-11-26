@@ -928,7 +928,12 @@ async function init() {
     pluginHost.register(createCodeOverlayPlugin());
     pluginHost.register(createMidiUiPlugin());
     pluginHost.register(createMobileUiPlugin());
-    pluginHost.register(createSignatureAssistPlugin());
+    pluginHost.register(
+      createSignatureAssistPlugin({
+        link: link?.api,
+        getPrimaryTransforms: () => pluginHost.getApi("desktop-mirror")?.getTransforms(),
+      }),
+    );
     pluginHost.init();
 
     // Public extension point: external code (console, userscripts, future

@@ -29,7 +29,11 @@ const signatureTheme = EditorView.baseTheme({
   ".cm-signature-assist strong": { textDecoration: "underline" },
 });
 
-export function signatureExtension(editor, getTransforms = () => undefined) {
+export function signatureExtension(
+  editor,
+  getTransforms = () => undefined,
+  getCapabilities = () => undefined,
+) {
   const resolve = createCustomSignatureResolver(editor);
   const getTransform = (name) => {
     const transforms = getTransforms();
@@ -56,6 +60,7 @@ export function signatureExtension(editor, getTransforms = () => undefined) {
           return lookup ? lookup(name, position) : null;
         },
         getTransform,
+        getCapabilities(),
       );
       if (!call) return null;
       if (
@@ -108,7 +113,7 @@ export function signatureExtension(editor, getTransforms = () => undefined) {
 
   return [
     signature,
-    hydraCompletionScope.of({ resolve, getTransforms }),
+    hydraCompletionScope.of({ resolve, getTransforms, getCapabilities }),
     EditorView.focusChangeEffect.of((_state, focused) => (focused ? null : dismiss.of(null))),
     EditorView.domEventObservers({
       keydown(event, view) {
@@ -121,14 +126,18 @@ export function signatureExtension(editor, getTransforms = () => undefined) {
   ];
 }
 
-export function createSignatureAssistPlugin() {
+export function createSignatureAssistPlugin({ link, getPrimaryTransforms } = {}) {
   return {
     id: "signature-assist",
     name: "Signature Assist",
     setup({ editor, hydra, isMobile }) {
       if (isMobile) return;
       return editor.addExtension(
-        signatureExtension(editor, () => hydra?.generator?.glslTransforms),
+        signatureExtension(
+          editor,
+          () => getPrimaryTransforms?.() ?? hydra?.generator?.glslTransforms,
+          () => ({ midi: true, audio: hydra?.synth?.a, link }),
+        ),
       );
     },
   };

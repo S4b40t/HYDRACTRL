@@ -21,6 +21,68 @@ function complete(state) {
   return hydraCompletions(new CompletionContext(state, state.selection.main.head, true));
 }
 
+test("Portable hints and completions share capabilities, receiver and shadowing checks", () => {
+  const resolve = createCustomSignatureResolver({
+    getCurrentTab: () => "main",
+    getTabCode: () => "",
+  });
+  const cases = [
+    ["midiPar|", 'midiParam("Depth", |)', "midiParam", { midi: true }],
+    ["a.setBandR|", "a.setBandRanges(|)", "setBandRanges", { audio: { setBandRanges() {} } }],
+    ["a.getBandR|", "a.getBandRanges(|)", "getBandRanges", { audio: { getBandRanges() {} } }],
+    [
+      "a.clearBandR|",
+      "a.clearBandRanges(|)",
+      "clearBandRanges",
+      { audio: { clearBandRanges() {} } },
+    ],
+    [
+      "globalThis.hydractrlLink.pu|",
+      "globalThis.hydractrlLink.pulse(|)",
+      "pulse",
+      { link: { pulse() {} } },
+    ],
+  ];
+  for (const [prefix, call, name, capabilities] of cases) {
+    const completions = (source, getCapabilities) =>
+      complete(
+        editorState(
+          source,
+          hydraCompletionScope.of({
+            resolve,
+            getTransforms: () => undefined,
+            getCapabilities,
+          }),
+        ),
+      );
+    const hint = (source, caps) => {
+      const state = editorState(source);
+      return hydraCallAtCursor(state, resolve(state), undefined, caps);
+    };
+    const present = completions(prefix, () => capabilities).options[0];
+    expect(present.label).toBe(name);
+    expect(hint(call, capabilities)).toMatchObject({ name, description: present.info });
+    expect(completions(prefix, () => ({}))).toBeNull();
+    expect(hint(call, {})).toBeNull();
+    const binding = call.split(/[.(]/)[0];
+    const shadow = (source) => `function local(${binding}) { ${source} }`;
+    expect(completions(shadow(prefix), () => capabilities)).toBeNull();
+    expect(hint(shadow(call), capabilities)).toBeNull();
+  }
+
+  const state = editorState(
+    "globalThis.hydractrl|",
+    hydraCompletionScope.of({
+      resolve,
+      getTransforms: () => undefined,
+      getCapabilities: () => ({ link: {} }),
+    }),
+  );
+  const property = complete(state).options[0];
+  expect(property).toMatchObject({ label: "hydractrlLink", type: "property" });
+  expect(property.apply).toBeUndefined();
+});
+
 test.each([
   ["os|", "osc", "osc(|)"],
   ["osc().rot|", "rotate", "osc().rotate(|)"],
