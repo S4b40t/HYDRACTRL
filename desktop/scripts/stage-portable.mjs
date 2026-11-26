@@ -33,11 +33,17 @@ for (const [from, to] of [
   ["desktop/scripts/HydractrlPortable.cmd", "HydractrlPortable.cmd"],
   ["desktop/scripts/PORTABLE-README.md", "START HERE.md"],
   ["docs/MIDI.md", "MIDI.md"],
+  ["docs/EDITOR-QOL.md", "EDITOR-QOL.md"],
   ["docs/SPECTRAL_ANALYSIS.md", "SPECTRAL_ANALYSIS.md"],
   ["docs/SIGNATURE-ASSIST.md", "SIGNATURE-ASSIST.md"],
   ["LICENSE", "LICENSE.HYDRACTRL.txt"],
 ]) {
   copyFileSync(join(root, from), join(directory, to));
+}
+const midiDiagnostic = join(directory, "midi-easing");
+mkdirSync(midiDiagnostic, { recursive: true });
+for (const name of ["README.md", "setup.js", "sketch.js"]) {
+  copyFileSync(join(root, "docs", "midi-easing", name), join(midiDiagnostic, name));
 }
 const diagnostics = join(directory, "Spectral Diagnostics");
 mkdirSync(diagnostics, { recursive: true });

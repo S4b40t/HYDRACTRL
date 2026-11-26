@@ -8,10 +8,13 @@ version and the desktop app share one version number; see
 
 ## [Unreleased]
 
-### Added
+## [1.2.2-portable.unified.2] - 2026-11-25
 
 - MIDI parameters accept a custom JavaScript easing function for smoothed
   transitions, including functions declared in Setup.
+- Improve Hydra completions, delimiter pairing, and editor keyboard navigation.
+- Add Portable-specific suggestions and signatures for MIDI, spectral audio,
+  and Link. Show transforms registered on the desktop primary renderer.
 
 ## [1.2.2-portable.unified.1] - 2026-11-25
 
