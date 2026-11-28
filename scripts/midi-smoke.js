@@ -49,7 +49,7 @@ try {
         `hydractrl-slot-bank-${bank}-slot-${index}`,
         `globalThis.midiRuns = (globalThis.midiRuns || 0) + 1;
          globalThis.midiScene = ${JSON.stringify(name)};
-         globalThis.midiValue = midiParam(${JSON.stringify(name)}, ${JSON.stringify({ ...definition, smoothing: 25 })});
+         globalThis.midiValue = midiParam(${JSON.stringify(name)}, ${JSON.stringify({ ...definition, attack: 25, release: 25 })});
          solid(midiValue, 0, 0).out();`,
       );
     };
@@ -306,6 +306,56 @@ try {
   await scene(head, "Easing diagnostic");
   assert.deepEqual(await values(page), Array(6).fill(0.2));
   assert.deepEqual(await values(head), Array(6).fill(0.2));
+
+  const articulation = () => page.getByText("Linear · CC 40 · Ch 1", { exact: true }).locator("..");
+  await articulation().getByText("Articulation", { exact: true }).click();
+  const attack = () => page.getByRole("spinbutton", { name: "Linear attack duration (ms)" });
+  const release = () => page.getByRole("spinbutton", { name: "Linear release duration (ms)" });
+  const attackEase = () => page.getByRole("combobox", { name: "Linear attack easing" });
+  const releaseEase = () => page.getByRole("combobox", { name: "Linear release easing" });
+  await attack().fill("800");
+  await release().fill("0");
+  await attackEase().selectOption("easeIn");
+  await releaseEase().selectOption("easeOut");
+  await articulation().getByRole("button", { name: "Save articulation" }).click();
+  await page.getByText("Saved articulation for Linear.", { exact: true }).waitFor();
+  await send([0xb0, 40, 25]);
+  const expectLinearTarget = (target) =>
+    outputSocket.then((socket) =>
+      socket.waitForEvent("framereceived", ({ payload }) => {
+        const message = JSON.parse(payload);
+        return (
+          message.type === "parameters" &&
+          message.values.some(([name, value]) => name === "Linear" && value === target)
+        );
+      }),
+    );
+  const reachedHigh = expectLinearTarget(1);
+  await send([0xb0, 40, 127]);
+  await reachedHigh;
+  await advance(400);
+  assert.ok(closeTo((await values(page))[0], 0.4));
+  assert.ok(closeTo((await values(head))[0], 0.4));
+  const reachedLow = expectLinearTarget(0);
+  await send([0xb0, 40, 0]);
+  await reachedLow;
+  assert.equal((await values(page))[0], 0);
+  assert.equal((await values(head))[0], 0);
+
+  await page.reload();
+  await midiReady();
+  await openSystem();
+  await send([0x90, 49, 100]);
+  await scene(page, "Easing diagnostic");
+  await page.getByText("MIDI mappings", { exact: true }).click();
+  await articulation().getByText("Articulation", { exact: true }).click();
+  assert.equal(await attack().inputValue(), "800");
+  assert.equal(await release().inputValue(), "0");
+  assert.equal(await attackEase().inputValue(), "easeIn");
+  assert.equal(await releaseEase().inputValue(), "easeOut");
+  await articulation().getByRole("button", { name: "Use sketch defaults" }).click();
+  assert.equal(await attack().inputValue(), "");
+  assert.equal(await releaseEase().inputValue(), "");
   console.log("MIDI browser smoke passed");
 } finally {
   await browser.close();

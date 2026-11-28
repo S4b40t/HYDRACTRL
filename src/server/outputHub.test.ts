@@ -32,6 +32,30 @@ const RUN = { type: "run", id: "run-1", setup: "", main: "osc(3).out()" } as con
 const SKETCH = { type: "sketch", setup: "a.setBins(6)", main: "osc(10).out()" } as const;
 
 describe("parseIncomingMessage", () => {
+  test("preserves recognized MIDI articulation overrides with validated targets", () => {
+    expect(
+      parseIncomingMessage({
+        type: "parameters",
+        parameterRun: "run-1",
+        values: [
+          [
+            "Rise",
+            0.8,
+            { attack: 200, release: -1, attackEase: "easeOut", releaseEase: "constructor" },
+          ],
+          ["Fall", 0, { release: 0, releaseEase: "linear" }],
+        ],
+      }),
+    ).toEqual({
+      type: "parameters",
+      parameterRun: "run-1",
+      values: [
+        ["Rise", 0.8, { attack: 200, attackEase: "easeOut" }],
+        ["Fall", 0, { release: 0, releaseEase: "linear" }],
+      ],
+    });
+  });
+
   test("accepts JSON strings and pre-parsed objects", () => {
     expect(parseIncomingMessage(JSON.stringify(SKETCH))).toEqual(SKETCH);
     expect(parseIncomingMessage(SKETCH)).toEqual(SKETCH);
@@ -77,7 +101,16 @@ describe("parseIncomingMessage", () => {
       [50, 150],
     ];
     const parameters = [
-      { name: "Level", min: 0, max: 1, default: 0.5, smoothing: 0, curve: 1, takeover: true },
+      {
+        name: "Level",
+        min: 0,
+        max: 1,
+        default: 0.5,
+        attack: 0,
+        release: 0,
+        curve: 1,
+        takeover: true,
+      },
     ];
     const result = { type: "result", id: RUN.id, success: true, bandRanges, parameters };
     expect(parseIncomingMessage(result)).toEqual(result);
