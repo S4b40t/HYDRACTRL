@@ -42,7 +42,7 @@ for (const [from, to] of [
 }
 const midiDiagnostic = join(directory, "midi-easing");
 mkdirSync(midiDiagnostic, { recursive: true });
-for (const name of ["README.md", "setup.js", "sketch.js"]) {
+for (const name of ["README.md", "setup.js", "sketch.js", "articulation.js"]) {
   copyFileSync(join(root, "docs", "midi-easing", name), join(midiDiagnostic, name));
 }
 const diagnostics = join(directory, "Spectral Diagnostics");

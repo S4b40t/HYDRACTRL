@@ -1,11 +1,11 @@
 const range = { default: 0.2, min: 0, max: 1 };
 const lanes = [
-  midiParam("Linear", { ...range, smoothing: 100 }),
-  midiParam("Smoothstep", { ...range, smoothing: 400, easing: smoothstep }),
-  midiParam("Ease in", { ...range, smoothing: 400, easing: easeIn }),
-  midiParam("Ease out", { ...range, smoothing: 100, easing: easeOut }),
-  midiParam("Ease out power 4", { ...range, smoothing: 400, easing: (t) => easeOut(t, 4) }),
-  midiParam("Elastic", { ...range, smoothing: 600, easing: elastic }),
+  midiParam("Linear", { ...range, attack: 100, release: 100 }),
+  midiParam("Smoothstep", { ...range, attack: 400, release: 400, attackEase: smoothstep }),
+  midiParam("Ease in", { ...range, attack: 400, release: 400, attackEase: easeIn }),
+  midiParam("Ease out", { ...range, attack: 100, release: 100, attackEase: easeOut }),
+  midiParam("Ease out power 4", { ...range, attack: 400, release: 400, attackEase: (t) => easeOut(t, 4) }),
+  midiParam("Elastic", { ...range, attack: 600, release: 600, attackEase: elastic }),
 ];
 
 globalThis.midiEasingDiagnostic = lanes;

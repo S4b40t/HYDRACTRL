@@ -48,12 +48,18 @@ precedence and the sketch row shows the conflict.
 
 ## Declare parameters in the Sketch tab
 
+This example references the two functions declared in Setup below.
+
 ```js
 const depth = midiParam("Distortion depth", {
   default: 0.12,
   min: 0,
   max: 0.5,
-  smoothing: 80,
+  attack: 1700,
+  release: 200,
+  attackEase: smootherstep,
+  releaseEase: easeOut,
+  takeover: false,
 });
 
 osc(20).modulate(noise(3), depth).out();
@@ -68,10 +74,12 @@ Optional settings are:
 
 | Option | Default | Behavior |
 | --- | --- | --- |
-| `smoothing` | `0` | Time in milliseconds to reach the new target from the current value. |
-| `easing` | Linear | Optional JavaScript function that shapes progress during a smoothed transition. |
+| `attack` | `0` | Duration in milliseconds when the target is above the current value. |
+| `release` | `0` | Duration in milliseconds when the target is below the current value. |
+| `attackEase` | Linear | Synchronous function that shapes an increasing transition. |
+| `releaseEase` | Linear | Synchronous function that shapes a decreasing transition. |
 | `curve` | `1` | Exponent on the normalized CC value. For example, `2` gives finer control at the low end. |
-| `takeover` | `true` | Catch or cross the current value before the control changes the parameter. Set to `false` for immediate absolute control. |
+| `takeover` | `true` | Catch or cross the current value before the control changes the parameter. Set to `false` for absolute control without pickup. |
 
 For a feedback sketch such as Tidal Memory, the same physical knob can
 instead learn a parameter named `"Feedback persistence"` with a range suitable
@@ -94,49 +102,55 @@ application.
 
 ## Shape the transition
 
-`curve` maps the physical CC position to a target. `smoothing` sets how long the
-transition to that target takes, from 0 to 60,000 ms. `easing` shapes how the
-value moves over that time. At `smoothing: 0`, changes are immediate.
+`curve` maps the CC position to a target. Each duration accepts 0 to 60,000 ms.
+A duration of 0 applies that direction immediately. For symmetric articulation,
+set both durations to the same value and pass the same function to both easing
+options. Replace older `smoothing` and `easing` declarations with the two
+directional options.
 
 Declare reusable functions in **Setup**:
 
 ```js
-const smoothstep = t => t * t * (3 - 2 * t);
-const easeIn = t => t ** 2;
-const easeOut = (t, power = 2) => 1 - (1 - t) ** power;
-const elastic = t => 1 - (1 - t) ** 3 * Math.cos(3 * Math.PI * t);
+const smootherstep = t => t ** 3 * (t * (6 * t - 15) + 10);
+const easeOut = t => 1 - (1 - t) ** 2;
 ```
 
-Use them in the **Sketch** tab:
+HYDRACTRL passes progress from 0 to 1 to the chosen callback and uses exact
+start and target values at the endpoints. Use pure callbacks that return
+finite numbers. A throw or invalid return uses linear progress for that
+sample. Custom easing may overshoot the target within the declared parameter
+range. Output is clamped to `min` and `max`. Each renderer creates the
+callbacks by running the same Setup and Sketch.
 
-```js
-const range = { default: 0.2, min: 0, max: 1, smoothing: 200 };
-const linear = midiParam("Linear", range);
-const smooth = midiParam("Smoothstep", { ...range, easing: smoothstep });
-const slowStart = midiParam("Ease in", { ...range, easing: easeIn });
-const fastStart = midiParam("Ease out", { ...range, easing: easeOut });
-const rotation = midiParam("Rotation", {
-  ...range, default: 0, min: -1, easing: t => easeOut(t, 4),
-});
-const bounce = midiParam("Elastic", { ...range, smoothing: 600, easing: elastic });
-```
+Each new target starts from the interpolated value at that moment. A reversal
+can change speed immediately. Repeated messages for the same target leave the
+current transition running. Long ease-in settings can trail a continuously
+moving control because each new target starts a new transition.
 
-Use pure, synchronous callbacks that return a finite number. HYDRACTRL passes
-normalized progress inside the transition. It uses the exact start and target
-values at the endpoints. A throw or invalid return uses linear progress for that
-sample. For an overshoot, aim at a target inside the parameter range, such as
-0.6 with bounds of 0 and 1. The output stays within `min` and `max`.
-Each renderer runs the same Setup and Sketch to create its own callback.
+## Override articulation in a mapping
 
-When a knob sends a new target, the transition starts from the current
-interpolated value. Continuous turns repeatedly revisit the start of the
-easing curve. Long durations with ease-in or smoothstep can trail the knob
-until it stops. Shorter durations, linear easing, or ease-out respond faster
-under continuous movement. A direction reversal keeps the value continuous,
-while its speed can change immediately.
+Learn a CC for the parameter, then expand **Articulation** on its row. Enter
+the two durations in milliseconds, choose the two easings, and click **Save
+articulation**. A blank duration or **Sketch default** inherits that field
+from the declaration. Overrides apply to the next target change and can be
+removed with **Use sketch defaults**. Saved overrides use built-in easing
+names and travel with the binding in a bank export. Relearning preserves the
+overrides. Clearing a binding removes its overrides. Existing saved bindings
+retain their CC assignments and inherit their sketch settings.
 
-The [diagnostic sketch](./midi-easing/README.md) displays six independently
-mapped parameters for side-by-side checks.
+## Use momentary controls
+
+Use a CC that sends 127 on press and 0 on release. For idle at minimum, set
+`default` to `min` and use `takeover: false`. A scene recall starts from its
+declared defaults. When HYDRACTRL loses or switches away from the active MIDI
+input, direct-control parameters return toward their defaults and Soft Takeover
+requires pickup again. The app can only detect a controller preset change if
+the MIDI input changes. If a preset switch leaves an active value behind or a
+device misses a release message, use **Reset parameter values** or recall the
+scene. A held button can legitimately send no further messages, so there is no
+automatic release timeout.
+
+The [diagnostic sketches](./midi-easing/README.md) provide isolated examples.
 
 ## Verification
 

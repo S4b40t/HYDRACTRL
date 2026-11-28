@@ -8,6 +8,11 @@ version and the desktop app share one version number; see
 
 ## [Unreleased]
 
+## [1.2.2-portable.unified.3] - 2026-11-28
+
+- Give MIDI parameters independent attack and release durations and easing functions.
+- Save per-direction overrides in MIDI mappings and reset parameters to their sketch defaults.
+
 ## [1.2.2-portable.unified.2] - 2026-11-25
 
 - MIDI parameters accept a custom JavaScript easing function for smoothed
