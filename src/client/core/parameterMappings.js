@@ -3,8 +3,16 @@ import {
   MAX_PARAMETERS,
   MAX_PARAMETER_NAME,
   createParameterPickup,
+  normalizeArticulation,
   normalizeParameter,
 } from "./sketchParameters.js";
+
+function normalizeBinding(candidate) {
+  const control = normalizeControl(candidate, true);
+  if (!control) return null;
+  const articulation = normalizeArticulation(candidate.articulation);
+  return articulation ? { ...control, articulation } : control;
+}
 
 export function normalizeParameterMappings(input) {
   const mappings = new Map();
@@ -13,7 +21,7 @@ export function normalizeParameterMappings(input) {
   for (const entry of input.slice(0, MAX_PARAMETERS)) {
     if (!Array.isArray(entry)) continue;
     const [name, candidate] = entry;
-    const binding = normalizeControl(candidate, true);
+    const binding = normalizeBinding(candidate);
     if (
       typeof name !== "string" ||
       !name.trim() ||
@@ -53,7 +61,9 @@ export function createParameterMappings({ read, write, onChange }) {
   function assign(name, candidate) {
     if (!active?.slot || !active.parameters.has(name))
       return "Save and run this sketch in a slot first.";
-    const binding = normalizeControl(candidate, true);
+    const previous = mappings.get(name);
+    const binding =
+      candidate && normalizeBinding({ ...candidate, articulation: previous?.articulation });
     if (candidate && !binding) return "Use a MIDI CC for a sketch parameter.";
     const next = new Map(mappings);
     if (binding) {
@@ -69,13 +79,46 @@ export function createParameterMappings({ read, write, onChange }) {
     if (!write(active.slot, next)) return "Could not save the sketch mapping.";
     mappings = next;
     pickups.delete(name);
+    if (!binding && previous?.articulation) onChange(snapshot());
+    return null;
+  }
+
+  function configure(name, articulation) {
+    const binding = mappings.get(name);
+    if (!binding || !active?.slot || !active.parameters.has(name))
+      return "Learn a CC before editing articulation.";
+    const next = new Map(mappings);
+    next.set(name, normalizeBinding({ ...binding, articulation }));
+    if (!write(active.slot, next)) return "Could not save articulation.";
+    mappings = next;
+    onChange(snapshot());
     return null;
   }
 
   function snapshot() {
     return active?.parameters.size
-      ? { parameterRun: active.run, values: [...active.values] }
+      ? {
+          parameterRun: active.run,
+          values: [...active.values].map(([name, value]) => {
+            const articulation = mappings.get(name)?.articulation;
+            return articulation ? [name, value, articulation] : [name, value];
+          }),
+        }
       : null;
+  }
+
+  function resetValues(directOnly = false) {
+    pickups.clear();
+    if (!active) return;
+    let changed = false;
+    for (const [name, definition] of active.parameters) {
+      if (directOnly && definition.takeover) continue;
+      if (active.values.get(name) !== definition.default) {
+        active.values.set(name, definition.default);
+        changed = true;
+      }
+    }
+    if (changed) onChange(snapshot());
   }
 
   function dispatch(control) {
@@ -104,6 +147,7 @@ export function createParameterMappings({ read, write, onChange }) {
   return {
     activate,
     assign,
+    configure,
     dispatch,
     snapshot,
     getSlot: () => active?.slot,
@@ -115,8 +159,10 @@ export function createParameterMappings({ read, write, onChange }) {
     rows: () =>
       [...(active?.parameters.values() ?? [])].map((definition) => ({
         name: definition.name,
+        definition,
         binding: mappings.get(definition.name),
       })),
     resetPickup: () => pickups.clear(),
+    resetValues,
   };
 }

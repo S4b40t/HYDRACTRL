@@ -236,7 +236,10 @@ export function createMidiManager(slotsPanel, { storage = createSafeStorage(), p
       }
     }
     if ((device ?? null) !== activeDevice) {
-      if (activeDevice) activeDevice.onmidimessage = null;
+      if (activeDevice) {
+        activeDevice.onmidimessage = null;
+        parameters?.resetValues?.(true);
+      }
       activeDevice = device ?? null;
       isConnected = Boolean(device);
       isNanoPad = device?.name?.toLowerCase().includes("nanopad") ?? false;
@@ -745,6 +748,8 @@ export function createMidiManager(slotsPanel, { storage = createSafeStorage(), p
         conflict: row.binding && parameterConflict(row.binding),
       })) ?? [],
     getParameterSlot: () => parameters?.getSlot(),
+    configureParameter: (name, articulation) => parameters?.configure(name, articulation),
+    resetParameterValues: () => parameters?.resetValues(),
     assignParameter: (name, binding) => {
       if (!activeDevice || !parameters) return "Select a MIDI input first.";
       return (binding && parameterConflict(binding)) || parameters.assign(name, binding);

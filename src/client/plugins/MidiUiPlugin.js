@@ -1,4 +1,5 @@
 import { NAVIGATION_ACTIONS, isContinuousAction } from "../core/midiControls.js";
+import { MAX_ARTICULATION_MS, MIDI_EASINGS } from "../core/sketchParameters.js";
 
 function button(text, action) {
   const element = document.createElement("button");
@@ -12,6 +13,65 @@ function bindingLabel(binding) {
   if (!binding) return "Unassigned";
   const type = binding.type === "cc" ? "CC" : "Note";
   return `${type} ${binding.number} · Ch ${binding.channel + 1}${binding.mode ? " · Toggle" : ""}`;
+}
+
+function articulationControls(name, binding, definition, save) {
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = "Articulation";
+  details.append(summary);
+  const form = document.createElement("form");
+  const fields = new Map();
+  for (const [direction, label] of [
+    ["attack", "Attack"],
+    ["release", "Release"],
+  ]) {
+    const row = document.createElement("div");
+    const duration = document.createElement("input");
+    duration.type = "number";
+    duration.min = "0";
+    duration.max = String(MAX_ARTICULATION_MS);
+    duration.step = "any";
+    duration.style.width = "6em";
+    duration.placeholder = String(definition[direction]);
+    duration.value = binding.articulation?.[direction] ?? "";
+    duration.setAttribute("aria-label", `${name} ${direction} duration (ms)`);
+    const easeKey = `${direction}Ease`;
+    const ease = document.createElement("select");
+    ease.setAttribute("aria-label", `${name} ${direction} easing`);
+    ease.add(new Option("Sketch default", ""));
+    for (const [key, entry] of Object.entries(MIDI_EASINGS)) {
+      ease.add(new Option(entry.label, key));
+    }
+    ease.value = binding.articulation?.[easeKey] ?? "";
+    const caption = document.createElement("label");
+    caption.append(`${label} (ms) `, duration);
+    row.append(caption, ease);
+    fields.set(direction, duration);
+    fields.set(easeKey, ease);
+    form.append(row);
+  }
+  const submit = document.createElement("button");
+  submit.type = "submit";
+  submit.textContent = "Save articulation";
+  form.append(submit);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const overrides = {};
+    for (const [key, field] of fields) {
+      if (field.value !== "") {
+        overrides[key] = field.type === "number" ? field.valueAsNumber : field.value;
+      }
+    }
+    save(overrides);
+  });
+  form.append(
+    button("Use sketch defaults", () => {
+      if (save({})) for (const field of fields.values()) field.value = "";
+    }),
+  );
+  details.append(form);
+  return details;
 }
 
 export function createMidiUiPlugin() {
@@ -106,7 +166,13 @@ export function createMidiUiPlugin() {
           form.append(message);
           return;
         }
-        for (const { name, binding, conflict } of rows) {
+        form.append(
+          button("Reset parameter values", () => {
+            manager.resetParameterValues();
+            feedback.textContent = "Parameters returned to sketch defaults.";
+          }),
+        );
+        for (const { name, binding, conflict, definition } of rows) {
           const row = mappingRow(name, binding, true, (next) =>
             manager.assignParameter(name, next),
           );
@@ -114,6 +180,15 @@ export function createMidiUiPlugin() {
             const message = document.createElement("div");
             message.textContent = conflict;
             row.append(message);
+          }
+          if (binding) {
+            row.append(
+              articulationControls(name, binding, definition, (overrides) => {
+                const error = manager.configureParameter(name, overrides);
+                feedback.textContent = error || `Saved articulation for ${name}.`;
+                return !error;
+              }),
+            );
           }
           form.append(row);
         }

@@ -41,6 +41,7 @@
 import {
   MAX_PARAMETERS,
   MAX_PARAMETER_NAME,
+  normalizeArticulation,
   normalizeParameter,
 } from "../client/core/sketchParameters.js";
 import { copyTransformMetadata } from "../client/core/transformMetadata.js";
@@ -88,7 +89,7 @@ export interface ResultMessage {
 export interface ParametersMessage {
   type: "parameters";
   parameterRun: string;
-  values: [string, number][];
+  values: [string, number, NonNullable<ReturnType<typeof normalizeArticulation>>?][];
 }
 
 export interface StateMessage {
@@ -346,13 +347,14 @@ export function parseIncomingMessage(raw: unknown): IncomingMessage | null {
       const values: ParametersMessage["values"] = [];
       for (const entry of message.values.slice(0, MAX_PARAMETERS)) {
         if (!Array.isArray(entry)) continue;
-        const [name, value] = entry;
+        const [name, value, options] = entry;
         if (
           typeof name === "string" &&
           name.length <= MAX_PARAMETER_NAME &&
           isFiniteNumber(value)
         ) {
-          values.push([name, value]);
+          const articulation = normalizeArticulation(options);
+          values.push(articulation ? [name, value, articulation] : [name, value]);
         }
       }
       if (!values.length) return null;

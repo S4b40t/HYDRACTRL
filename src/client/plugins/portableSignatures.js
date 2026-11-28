@@ -5,7 +5,7 @@ const midi = {
     {
       name: "options",
       documentation:
-        "Specify min, max and default. Optional: curve, smoothing (ms), easing (a synchronous function), and takeover.",
+        "Specify min, max and default. Optional: attack and release (ms), attackEase and releaseEase (synchronous functions), curve, and takeover.",
     },
   ],
 };
