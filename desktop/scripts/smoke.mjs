@@ -17,6 +17,7 @@
  *                      WebGL
  *   --optional-output  report a Syphon or Spout output that doesn't start as a
  *                      warning, not a failure (hosted CI runners have no GPU)
+ *   Set HYDRACTRL_LINK_TEST_PEER to run Link checks with the real SDK peer.
  *
  * On Linux without a display, run under `xvfb-run -a`. Exits 1 on any failure.
  */
@@ -34,6 +35,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { linkHelperPid, runLinkSmoke } from "./link-smoke.mjs";
 
 const desktopDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -325,7 +327,7 @@ async function main() {
     );
     check(
       "app mode reported",
-      state.app.packaged === (launch.mode === "packaged"),
+      state.app.packaged === (launch.mode !== "dev"),
       `packaged=${state.app.packaged}`,
     );
     const expectAvailable = process.platform === "darwin" || process.platform === "win32";
@@ -336,7 +338,7 @@ async function main() {
     );
     check(
       "settings are the defaults",
-      state.settings.output.name === "HYDRACTRL" && state.settings.output.width === 1920,
+      state.settings.output.name === state.app.name && state.settings.output.width === 1920,
     );
 
     if (noGpu) {
@@ -616,6 +618,20 @@ async function main() {
       "settings window still open after updates",
       (await windowTitles()).includes("Output Settings"),
     );
+    if (process.env.HYDRACTRL_LINK_TEST_PEER) {
+      await runLinkSmoke({
+        peerPath: process.env.HYDRACTRL_LINK_TEST_PEER,
+        check,
+        inMainWindow,
+        inOutput,
+        inSettings,
+        runInEditor,
+        getState,
+        restartOutput: () => inMainWindow("window.hydractrlDesktop.restartOutput()"),
+        optionalOutput: flag("--optional-output"),
+        noGpu,
+      });
+    }
     await inSettings(
       'document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); true',
     );
@@ -663,6 +679,14 @@ async function main() {
       !noGpu ? !/desktop:set-mirror failed/.test(log) : true,
       (log.match(/desktop:set-mirror failed.*/) || [""])[0],
     );
+    if (process.env.HYDRACTRL_LINK_TEST_PEER) {
+      const pid = linkHelperPid(logPath);
+      check(
+        "Link helper exited cleanly on app quit",
+        Boolean(pid) && log.includes(`[link] helper exited (PID ${pid}, code 0)`),
+        pid && `pid ${pid}`,
+      );
+    }
     ws.close();
   } catch (error) {
     check("smoke test completed", false, String(error.message || error).slice(0, 300));

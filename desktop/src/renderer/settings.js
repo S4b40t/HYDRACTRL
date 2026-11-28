@@ -2,6 +2,7 @@
 // the page re-renders from the state pushed back by the main process.
 (() => {
   const api = window.hydractrlDesktop;
+  const link = window.hydractrlLinkSettings;
   const $ = (id) => document.getElementById(id);
 
   const els = {
@@ -21,6 +22,12 @@
     preview: $("preview"),
     includeAlpha: $("includeAlpha"),
     autoStart: $("autoStart"),
+    graphics: $("section-graphics"),
+    graphicsPreference: $("graphics-preference"),
+    graphicsRenderer: $("graphics-renderer"),
+    graphicsStatus: $("graphics-status"),
+    graphicsError: $("graphics-error"),
+    openGraphicsSettings: $("open-graphics-settings"),
     serverUrl: $("server-url"),
     outputUrl: $("output-url"),
     copyUrl: $("copy-url"),
@@ -35,12 +42,20 @@
     serverMode: $("server-mode"),
     logPath: $("log-path"),
     openLogs: $("open-logs"),
+    linkSection: $("section-link"),
+    linkEnabled: $("link-enabled"),
+    linkQuantum: $("link-quantum"),
+    linkState: $("link-state"),
+    linkError: $("link-error"),
+    linkCopy: $("link-copy"),
   };
 
   let state = null;
   let savedTimer = null;
   // The last media folder action that failed, until the next one
   let mediaError = null;
+  let graphicsPreference = null;
+  let graphicsBusy = false;
 
   function isEditing(element) {
     return document.activeElement === element;
@@ -137,6 +152,9 @@
     state = next;
     const { output, settings, server, app, presets, frameRates } = state;
     els.version.textContent = `v${app.version}`;
+    els.linkSection.hidden = !state.linkAvailable && !settings.link?.enabled;
+    els.linkEnabled.checked = settings.link?.enabled === true;
+    if (!isEditing(els.linkQuantum)) els.linkQuantum.value = settings.link?.quantum ?? 4;
 
     const status = describeStatus(output);
     els.dot.dataset.tone = status.tone;
@@ -200,7 +218,8 @@
     els.outputUrl.textContent = url ? `${url}/output` : "–";
     els.copyUrl.disabled = !url;
     els.openOutput.disabled = !url;
-    els.allowNetwork.checked = settings.server.allowNetwork;
+    els.allowNetwork.checked = !app.portable && settings.server.allowNetwork;
+    els.allowNetwork.disabled = app.portable;
 
     renderMedia(state.media);
 
@@ -210,6 +229,50 @@
     els.serverMode.textContent = describeServer(server);
     els.logPath.textContent = shortenPath(app.logPath);
     els.logPath.title = app.logPath;
+  }
+
+  function showGraphicsError(error) {
+    els.graphicsError.textContent = error?.message || "";
+    els.graphicsError.hidden = !error;
+  }
+
+  async function refreshGraphics() {
+    if (els.graphics.hidden || graphicsBusy) return;
+    graphicsBusy = true;
+    try {
+      const graphics = await api.getGraphicsPreference();
+      graphicsPreference = graphics.preference;
+      els.graphicsPreference.value = graphicsPreference;
+      els.graphicsRenderer.textContent = graphics.renderer || "Unavailable";
+      showGraphicsError(null);
+    } catch (error) {
+      els.graphicsRenderer.textContent = "Unavailable";
+      showGraphicsError(error);
+    } finally {
+      graphicsBusy = false;
+      els.graphicsPreference.disabled = graphicsPreference === null;
+    }
+  }
+
+  async function saveGraphics() {
+    if (graphicsBusy) {
+      els.graphicsPreference.value = graphicsPreference ?? "default";
+      return;
+    }
+    graphicsBusy = true;
+    els.graphicsPreference.disabled = true;
+    els.graphicsStatus.textContent = "";
+    try {
+      graphicsPreference = await api.setGraphicsPreference(els.graphicsPreference.value);
+      els.graphicsStatus.textContent = "Saved. Restart HYDRACTRL to apply.";
+      showGraphicsError(null);
+    } catch (error) {
+      showGraphicsError(error);
+    } finally {
+      els.graphicsPreference.value = graphicsPreference;
+      els.graphicsPreference.disabled = false;
+      graphicsBusy = false;
+    }
   }
 
   function renderMedia(media) {
@@ -257,9 +320,58 @@
     }
   }
 
+  async function updateLink(patch) {
+    try {
+      if (await link.configure(patch)) flashSaved();
+    } catch (error) {
+      els.linkError.textContent = error.message;
+      els.linkError.hidden = false;
+    }
+  }
+
+  async function refreshLink() {
+    if (!els.linkSection.hidden) {
+      try {
+        const view = await link.diagnostics();
+        const label = {
+          disabled: "Disabled",
+          unavailable: "Helper unavailable",
+          starting: "Starting",
+          local: "Local timing",
+          synced: "Synced",
+          stale: "Stale timing",
+          retrying: "Retrying",
+        }[view.state];
+        els.linkState.textContent = `${label} · helper ${view.helper} · ${view.peers} peers · ${view.anchor.bpm.toFixed(1)} BPM · phase ${view.phase.toFixed(2)} / ${view.anchor.quantum}`;
+        els.linkError.textContent = view.error || "";
+        els.linkError.hidden = !view.error;
+      } catch (_error) {
+        els.linkState.textContent = "Link status unavailable";
+      }
+    }
+    setTimeout(refreshLink, 300);
+  }
+
   function bind() {
     els.toggle.addEventListener("click", () => api.toggleOutput().catch(() => {}));
     els.restart.addEventListener("click", () => api.restartOutput().catch(() => {}));
+    if (link) {
+      els.linkEnabled.addEventListener("change", () =>
+        updateLink({ enabled: els.linkEnabled.checked }),
+      );
+      els.linkQuantum.addEventListener("change", () =>
+        updateLink({ quantum: +els.linkQuantum.value }),
+      );
+      els.linkCopy.addEventListener("click", () =>
+        link
+          .copyDiagnostics()
+          .then((copied) => {
+            if (copied) flashSaved();
+          })
+          .catch(() => {}),
+      );
+      refreshLink();
+    }
 
     els.name.addEventListener("change", () => update({ output: { name: els.name.value } }));
     els.name.addEventListener("keydown", (event) => {
@@ -295,6 +407,11 @@
     els.autoStart.addEventListener("change", () =>
       update({ output: { autoStart: els.autoStart.checked } }),
     );
+    els.graphicsPreference.addEventListener("change", saveGraphics);
+    els.openGraphicsSettings.addEventListener("click", () =>
+      api.openGraphicsSettings().catch(showGraphicsError),
+    );
+    window.addEventListener("focus", refreshGraphics);
     els.allowNetwork.addEventListener("change", () =>
       update({ server: { allowNetwork: els.allowNetwork.checked } }),
     );
@@ -332,6 +449,7 @@
       name: els.name,
       server: els.allowNetwork,
       media: els.chooseMedia,
+      link: els.linkEnabled,
     };
     const target = map[section];
     if (!target) return;
@@ -353,6 +471,10 @@
     .getState()
     .then((initial) => {
       render(initial);
+      if (api.platform === "win32" && initial.app.packaged) {
+        els.graphics.hidden = false;
+        refreshGraphics();
+      }
       const section = window.location.hash.replace(/^#/, "");
       if (section) setTimeout(() => focusSection(section), 50);
     })

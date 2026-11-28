@@ -13,6 +13,8 @@
  * leaves a.fft on the system default until it is back.
  */
 
+import { installSpectralAudio } from "./spectralAudio.js";
+
 export const AUDIO_INPUT_KEY = "hydractrl-audio-input";
 
 // Not inputs of their own: the system default and (on Windows) the one for calls
@@ -73,13 +75,22 @@ function isMicrophoneRequest(constraints) {
   return Boolean(constraints?.audio) && !constraints.video;
 }
 
+// Voice processing can remove bass or flatten amplitude before either FFT sees it.
+const AUDIO_CAPTURE = {
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+};
+
 /**
  * One hydra instance's analyser and the input it listens to.
  * `report` is called whenever that changes.
  */
 function createListener(mediaDevices, report) {
   let audio = null;
+  let spectral = null;
   let stream = null;
+  let unwatch = () => {};
   // The input in use, null for the system default
   let device = null;
   // The choice the stream was opened for, and whether it had to do without it
@@ -102,7 +113,9 @@ function createListener(mediaDevices, report) {
 
   async function openExact(deviceId) {
     try {
-      return await mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId } } });
+      return await mediaDevices.getUserMedia({
+        audio: { ...AUDIO_CAPTURE, deviceId: { exact: deviceId } },
+      });
     } catch (_error) {
       return null;
     }
@@ -135,7 +148,7 @@ function createListener(mediaDevices, report) {
       const byLabel = found.match ? await openExact(found.match.deviceId) : null;
       if (byLabel) return { stream: byLabel, device: found.match, missing: false };
     }
-    const fallback = await mediaDevices.getUserMedia({ video: false, audio: true });
+    const fallback = await mediaDevices.getUserMedia({ video: false, audio: AUDIO_CAPTURE });
     if (choice && !labelled) {
       // Labels only show once the page may listen, which it now does
       const { match } = await lookUp(choice);
@@ -149,15 +162,18 @@ function createListener(mediaDevices, report) {
   }
 
   function watch(opened) {
-    for (const track of opened.getAudioTracks?.() ?? []) {
-      // Unplugged: listen to what is left
-      track.addEventListener?.("ended", () => {
-        if (opened !== stream || released) return;
-        missing = Boolean(wanted);
-        report();
-        use(wanted);
-      });
-    }
+    const tracks = opened.getAudioTracks?.() ?? [];
+    const onEnded = () => {
+      if (opened !== stream || released) return;
+      if (!isLive(opened)) spectral?.setSource(null);
+      missing = Boolean(wanted);
+      report();
+      use(wanted);
+    };
+    for (const track of tracks) track.addEventListener?.("ended", onEnded);
+    return () => {
+      for (const track of tracks) track.removeEventListener?.("ended", onEnded);
+    };
   }
 
   async function apply() {
@@ -180,7 +196,22 @@ function createListener(mediaDevices, report) {
       return state();
     }
 
+    if (!handOver) {
+      try {
+        const source = audio.context.createMediaStreamSource(opened.stream);
+        audio.meyda.setSource(source);
+        audio.source = source;
+        audio.stream = opened.stream;
+      } catch (failure) {
+        stopStream(opened.stream);
+        error = failure?.message || String(failure);
+        report();
+        return state();
+      }
+    }
+
     const previous = stream;
+    unwatch();
     stream = opened.stream;
     device = opened.device;
     missing = opened.missing;
@@ -190,16 +221,12 @@ function createListener(mediaDevices, report) {
       // hydra builds its analyser on this stream
       handOver(stream);
       handOver = null;
-    } else {
-      try {
-        audio.meyda.setSource(audio.context.createMediaStreamSource(stream));
-        audio.stream = stream;
-      } catch (failure) {
-        error = failure?.message || String(failure);
-      }
-      stopStream(previous);
+      await Promise.resolve(); // Hydra's getUserMedia reaction exposes the source.
+      if (released) return state();
     }
-    watch(stream);
+    spectral?.setSource(isLive(stream) ? audio?.source : null);
+    stopStream(previous);
+    unwatch = watch(stream);
     report();
     return state();
   }
@@ -218,7 +245,12 @@ function createListener(mediaDevices, report) {
    */
   function attach(create, choice) {
     wanted = choice;
-    if (typeof mediaDevices?.getUserMedia !== "function") return create();
+    if (typeof mediaDevices?.getUserMedia !== "function") {
+      const hydra = create();
+      audio = hydra?.synth?.a ?? null;
+      spectral = installSpectralAudio(audio);
+      return hydra;
+    }
     const original = mediaDevices.getUserMedia;
     const own = Object.hasOwn(mediaDevices, "getUserMedia");
     let asked = false;
@@ -239,14 +271,19 @@ function createListener(mediaDevices, report) {
       else Reflect.deleteProperty(mediaDevices, "getUserMedia");
     }
     audio = hydra?.synth?.a ?? null;
+    spectral = installSpectralAudio(audio);
     if (asked) use(choice);
     return hydra;
   }
 
   function release() {
     released = true;
+    unwatch();
+    spectral?.dispose();
     stopStream(stream);
     stream = null;
+    audio?.canvas?.remove();
+    if (audio?.context?.state !== "closed") audio?.context?.close?.().catch(() => {});
   }
 
   return { attach, use, release, state, needsInput: () => missing || !isLive(stream) };
@@ -272,7 +309,7 @@ export function createAudioInputs(options = {}) {
   function getState() {
     const [main] = listeners;
     return main
-      ? { ...main.state(), choice }
+      ? { ...main.listener.state(), choice }
       : { choice, device: null, missing: false, listening: false, error: null };
   }
 
@@ -281,8 +318,16 @@ export function createAudioInputs(options = {}) {
   /** Create a hydra instance with `create()`; its a.fft listens to the chosen input. */
   function attach(create) {
     const listener = createListener(mediaDevices, announce);
-    listeners.push(listener);
-    return listener.attach(create, choice);
+    const hydra = listener.attach(create, choice);
+    listeners.push({ hydra, listener });
+    return hydra;
+  }
+
+  function detach(hydra) {
+    const index = listeners.findIndex((entry) => entry.hydra === hydra);
+    if (index < 0) return;
+    const [{ listener }] = listeners.splice(index, 1);
+    listener.release();
   }
 
   /** Listen to an input, `{ deviceId, label }`, or to the system default (null). */
@@ -290,13 +335,13 @@ export function createAudioInputs(options = {}) {
     choice = normalizeAudioInput(next);
     storage?.setJSON?.(AUDIO_INPUT_KEY, choice);
     announce();
-    await Promise.all(listeners.map((listener) => listener.use(choice)));
+    await Promise.all(listeners.map(({ listener }) => listener.use(choice)));
     return getState();
   }
 
   /** An input was plugged in or pulled out: go back to the chosen one if it had gone. */
   function refresh() {
-    for (const listener of listeners) {
+    for (const { listener } of listeners) {
       if (listener.needsInput()) listener.use(choice);
     }
     announce();
@@ -306,6 +351,7 @@ export function createAudioInputs(options = {}) {
 
   return {
     attach,
+    detach,
     choose,
     refresh,
     getChoice: () => choice,
@@ -313,7 +359,7 @@ export function createAudioInputs(options = {}) {
     list: () => listAudioInputs(mediaDevices),
     dispose() {
       mediaDevices?.removeEventListener?.("devicechange", refresh);
-      for (const listener of listeners) listener.release();
+      for (const { listener } of listeners) listener.release();
       listeners.length = 0;
     },
   };

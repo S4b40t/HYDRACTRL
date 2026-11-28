@@ -7,6 +7,18 @@ const { contextBridge, ipcRenderer, sharedTexture, webUtils } = require("electro
 const STATE_CHANNEL = "desktop:state";
 const FOCUS_CHANNEL = "desktop:focus-section";
 
+if (location.protocol === "file:") {
+  contextBridge.exposeInMainWorld("hydractrlLinkSettings", {
+    diagnostics: () => ipcRenderer.invoke("link:diagnostics"),
+    configure: (link) => ipcRenderer.invoke("link:configure", link),
+    copyDiagnostics: () => ipcRenderer.invoke("link:copy-diagnostics"),
+  });
+} else {
+  contextBridge.exposeInMainWorld("hydractrlLinkTiming", {
+    snapshot: () => ipcRenderer.invoke("link:snapshot"),
+  });
+}
+
 async function invoke(channel, ...args) {
   const result = await ipcRenderer.invoke(channel, ...args);
   if (result && result.ok) return result.value;
@@ -84,6 +96,9 @@ contextBridge.exposeInMainWorld("hydractrlDesktop", {
     ),
   openMediaFolder: () => invoke("desktop:open-media-folder"),
   chooseMediaFolder: () => invoke("desktop:choose-media-folder"),
+  getGraphicsPreference: () => invoke("desktop:get-graphics-preference"),
+  setGraphicsPreference: (preference) => invoke("desktop:set-graphics-preference", preference),
+  openGraphicsSettings: () => invoke("desktop:open-graphics-settings"),
   // Frames of the running output: start(onFrame) gets each one as a VideoFrame
   mirror,
   onState: (callback) => subscribe(STATE_CHANNEL, callback),

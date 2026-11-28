@@ -15,6 +15,8 @@ export const DESKTOP_DIR = resolve(here, "..", "..");
 export const REPO_ROOT = resolve(DESKTOP_DIR, "..");
 export const RENDERER_DIR = join(DESKTOP_DIR, "src", "renderer");
 export const PRELOAD_PATH = join(DESKTOP_DIR, "src", "preload", "desktop.cjs");
+export const LINK_PRELOAD_PATH = join(DESKTOP_DIR, "src", "preload", "link.cjs");
+export const LINK_EXPERIMENT_PROFILE = "HYDRACTRL Link Experimental";
 export const ICON_PATH = join(DESKTOP_DIR, "resources", "icon.png");
 
 export function resolvePaths({ packaged, resourcesPath, userDataPath, platform }) {

@@ -1,0 +1,41 @@
+diff --git a/src/lib/audio.js b/src/lib/audio.js
+index 952494b4b6469f057f1e607b4ad409906df62032..52669739d75eeeff198800769e0defa29dcefa24 100755
+--- a/src/lib/audio.js
++++ b/src/lib/audio.js
+@@ -50,14 +50,13 @@ class Audio {
+       .then((stream) => {
+       //  console.log('got mic stream', stream)
+         this.stream = stream
+-        this.context = new AudioContext()
+-        //  this.context = new AudioContext()
+-        let audio_stream = this.context.createMediaStreamSource(stream)
++        this.context = this.context || new AudioContext()
++        this.source = this.context.createMediaStreamSource(stream)
+
+       //  console.log(this.context)
+         this.meyda = Meyda.createMeydaAnalyzer({
+           audioContext: this.context,
+-          source: audio_stream,
++          source: this.source,
+           featureExtractors: [
+             'loudness',
+             //  'perceptualSpread',
+@@ -92,6 +91,7 @@ class Audio {
+      if(features && features !== null){
+        this.vol = features.loudness.total
+        this.detectBeat(this.vol)
++       if(this._updateCustomBins && this._updateCustomBins()) return
+        // reduce loudness array to number of bins
+        const reducer = (accumulator, currentValue) => accumulator + currentValue;
+        let spacing = Math.floor(features.loudness.specific.length/this.bins.length)
+@@ -116,8 +116,10 @@ class Audio {
+          Math.max(0, (bin - this.settings[index].cutoff)/this.settings[index].scale)
+        ))
+        if(this.isDrawing) this.draw()
++       return
+      }
+    }
++   if(this._updateCustomBins) this._updateCustomBins()
+   }
+
+   setCutoff (cutoff) {

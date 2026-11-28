@@ -98,6 +98,17 @@ describe("validateSettings", () => {
     expect(next.output.evil).toBeUndefined();
     expect(next.extra).toBeUndefined();
   });
+
+  test("keeps Link disabled in older profiles and clamps a saved quantum", () => {
+    expect(validateSettings({ output: { name: "Older settings" } }).link).toEqual({
+      enabled: false,
+      quantum: 4,
+    });
+    expect(validateSettings({ link: { enabled: true, quantum: 40 } }).link).toEqual({
+      enabled: true,
+      quantum: 16,
+    });
+  });
 });
 
 describe("changedKeys and presetLabel", () => {

@@ -18,6 +18,7 @@ const INTERFACE = { deviceId: "id-interface", label: "USB Interface" };
 function createMediaDevices(inputs = [BUILT_IN, INTERFACE], { labels = true } = {}) {
   const requests = [];
   const streams = [];
+  const capture = [];
   const listeners = new Set();
   const devices = {
     inputs: [...inputs],
@@ -26,6 +27,7 @@ function createMediaDevices(inputs = [BUILT_IN, INTERFACE], { labels = true } = 
     labelled: labels,
     requests,
     streams,
+    capture,
     async enumerateDevices() {
       const shown = (input) => ({ ...input, label: devices.labelled ? input.label : "" });
       return [
@@ -39,6 +41,7 @@ function createMediaDevices(inputs = [BUILT_IN, INTERFACE], { labels = true } = 
     async getUserMedia(constraints) {
       const exact = constraints.audio?.deviceId?.exact;
       requests.push(exact ?? "default");
+      capture.push(constraints.audio);
       if (!devices.allowed) throw new Error("Permission denied");
       const input = exact ? devices.inputs.find((i) => i.deviceId === exact) : devices.inputs[0];
       if (!input) throw new Error("Requested device not found");
@@ -50,9 +53,11 @@ function createMediaDevices(inputs = [BUILT_IN, INTERFACE], { labels = true } = 
           track.readyState = "ended";
         },
         addEventListener: (_type, listener) => ended.add(listener),
+        removeEventListener: (_type, listener) => ended.delete(listener),
       };
       const stream = {
         input: input.label,
+        endedListeners: () => ended.size,
         getTracks: () => [track],
         getAudioTracks: () => [track],
         // As when the input is unplugged
@@ -162,6 +167,11 @@ describe("createAudioInputs", () => {
     await settle();
 
     expect(mediaDevices.requests).toEqual(["default"]);
+    expect(mediaDevices.capture[0]).toEqual({
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    });
     expect(heard(hydra)).toBe("Built-in Microphone");
     expect(audioInputs.getState()).toEqual({
       choice: null,
@@ -181,6 +191,12 @@ describe("createAudioInputs", () => {
     await settle();
 
     expect(mediaDevices.requests).toEqual(["id-interface"]);
+    expect(mediaDevices.capture[0]).toEqual({
+      deviceId: { exact: INTERFACE.deviceId },
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    });
     expect(heard(hydra)).toBe("USB Interface");
     expect(audioInputs.getState().device).toEqual(INTERFACE);
   });
@@ -387,8 +403,26 @@ describe("createAudioInputs", () => {
     await settle();
     audioInputs.dispose();
     expect(mediaDevices.streams[0].getTracks()[0].readyState).toBe("ended");
+    expect(mediaDevices.streams[0].endedListeners()).toBe(0);
     mediaDevices.change([BUILT_IN]);
     await settle();
     expect(mediaDevices.requests).toEqual(["default"]);
+  });
+
+  test("detaches a renderer before its pending stream opens and can attach a new one", async () => {
+    const mediaDevices = createMediaDevices();
+    const audioInputs = createAudioInputs({ mediaDevices });
+    const opening = audioInputs.attach(() => createHydra(mediaDevices));
+    await Promise.resolve(); // Capture was requested and hasn't yet resolved.
+    audioInputs.detach(opening);
+    const replacement = audioInputs.attach(() => createHydra(mediaDevices));
+    await settle();
+    expect(mediaDevices.streams[0].getTracks()[0].readyState).toBe("ended");
+    expect(mediaDevices.streams[0].endedListeners()).toBe(0);
+    expect(heard(replacement)).toBe(BUILT_IN.label);
+    await audioInputs.choose(INTERFACE);
+    expect(heard(replacement)).toBe(INTERFACE.label);
+    expect(mediaDevices.streams[1].endedListeners()).toBe(0);
+    audioInputs.dispose();
   });
 });

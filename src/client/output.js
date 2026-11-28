@@ -27,9 +27,12 @@ import {
   normalizeSlotsState,
   runningSnapshot,
 } from "./core/editorSnapshot.js";
+import { installLinkClient } from "./core/linkClient.js";
 import { buildOutputSocketUrl, detectOutputServer } from "./core/outputProtocol.js";
 import { createPrimaryRunner } from "./core/primaryRunner.js";
+import { createRenderLoop } from "./core/renderLoop.js";
 import { applySketchParameters, executeSketch, readSketchParameters } from "./core/sketchRunner.js";
+import { copyTransformMetadata } from "./core/transformMetadata.js";
 import { readSketchFromHash } from "./plugins/UrlSharePlugin.js";
 
 // hydra-synth expects a Node-style global
@@ -43,6 +46,7 @@ window.nanoY = 0.5;
 
 // Same instance options as the main page, so sketches behave identically
 const HYDRA_OPTIONS = {
+  autoLoop: false,
   detectAudio: true,
   enableStreamCapture: false,
   numBins: 6,
@@ -68,7 +72,7 @@ function clearStatus() {
   statusElement()?.remove();
 }
 
-async function initHydra() {
+async function initHydra(signal) {
   const container = document.getElementById("hydra-canvas");
   const canvas = document.createElement("canvas");
   canvas.width = window.innerWidth || 1280;
@@ -77,21 +81,50 @@ async function initHydra() {
   container.appendChild(canvas);
 
   const hydraModule = await import("hydra-synth");
+  if (signal.aborted) return null;
   const HydraSynth = hydraModule.default || hydraModule;
   const hydra = audioInputs.attach(() => new HydraSynth({ canvas, ...HYDRA_OPTIONS }));
 
-  window.addEventListener("resize", () => {
-    hydra.setResolution(window.innerWidth, window.innerHeight);
-  });
+  window.addEventListener(
+    "resize",
+    () => hydra.setResolution(window.innerWidth, window.innerHeight),
+    { signal },
+  );
   return hydra;
 }
 
 async function init() {
+  const events = new AbortController();
+  let renderLoop;
+  let socket;
+  let codeOverlay;
+  let hydra;
+  function dispose() {
+    if (events.signal.aborted) return;
+    events.abort();
+    renderLoop?.stop();
+    socket?.dispose();
+    codeOverlay?.dispose();
+    audioInputs.dispose();
+    hydra?.regl.destroy();
+  }
+
+  window.addEventListener(
+    "pagehide",
+    (event) => {
+      if (!event.persisted) dispose();
+    },
+    { signal: events.signal },
+  );
   try {
-    const hydra = await initHydra();
+    hydra = await initHydra(events.signal);
+    if (!hydra || events.signal.aborted) return;
     window.mainHydra = hydra;
+    renderLoop = createRenderLoop((dt) => hydra.tick(dt));
+    renderLoop.start();
 
     const { P5Wrapper } = await import("./p5-wrapper.ts");
+    if (events.signal.aborted) return;
     window.P5 = P5Wrapper;
 
     // Regular browsers keep an AudioContext suspended until a user gesture;
@@ -100,16 +133,18 @@ async function init() {
       const context = window.a?.context;
       if (context && context.state === "suspended") context.resume().catch(() => {});
     };
-    document.addEventListener("pointerdown", resumeAudio);
-    document.addEventListener("keydown", resumeAudio);
+    document.addEventListener("pointerdown", resumeAudio, { signal: events.signal });
+    document.addEventListener("keydown", resumeAudio, { signal: events.signal });
 
-    let socket = null;
     let hasRunSketch = false;
-    const primary = new URLSearchParams(window.location.search).has("primary");
+    const options = new URLSearchParams(window.location.search);
+    const primary = options.has("primary");
+    if (primary && options.has("alpha")) document.documentElement.classList.add("output-alpha");
+    if (primary) installLinkClient(window);
     const primaryRunner = primary ? createPrimaryRunner({ hydra }) : null;
 
     // Part of the page, so the frames the desktop app shares carry it
-    const codeOverlay = createCodeOverlayView(document.getElementById("hydra-canvas"));
+    codeOverlay = createCodeOverlayView(document.getElementById("hydra-canvas"));
     let overlaySettings = normalizeCodeOverlay(null);
     // Until the interface sends the editor, the overlay shows the code that runs here
     let followsEditor = false;
@@ -175,13 +210,16 @@ async function init() {
       else console.error("[output] sketch failed:", result.message);
       const reply = { type: "result", id: message.id, success: result.success };
       if (!result.success) reply.message = result.message;
+      if (result.bandRanges !== undefined) reply.bandRanges = result.bandRanges;
       if (result.parameters) reply.parameters = result.parameters;
+      if (result.success) reply.transforms = copyTransformMetadata(hydra.generator?.glslTransforms);
       socket?.send(reply);
     }
 
     const urlSketch = readSketchFromHash(window.location.hash);
     if (urlSketch !== null) {
       await run({ setup: "", main: urlSketch });
+      if (events.signal.aborted) return;
     }
 
     socket = createReconnectingSocket({
@@ -232,13 +270,16 @@ async function init() {
       audioInput: () => audioInputs.getState(),
     };
 
-    if (await detectOutputServer()) {
+    const available = await detectOutputServer();
+    if (events.signal.aborted) return;
+    if (available) {
       if (!hasRunSketch) setStatus("waiting for HYDRACTRL");
       socket.connect();
     } else if (!hasRunSketch) {
       setStatus("no HYDRACTRL server on this host, open with a #sketch= link");
     }
   } catch (error) {
+    dispose();
     console.error("[output] failed to start:", error);
     setStatus(`failed to start: ${error.message || error}`);
   }

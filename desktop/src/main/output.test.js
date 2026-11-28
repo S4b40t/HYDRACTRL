@@ -67,6 +67,7 @@ function setup({
   url = "http://127.0.0.1:3000",
   settings = {},
   failCreate = null,
+  linkPreload = null,
 } = {}) {
   const bridges = [];
   const statuses = [];
@@ -91,6 +92,7 @@ function setup({
     getSettings: () => current,
     onStatus: (s) => statuses.push(s),
     log: silentLog,
+    linkPreload,
     powerSaveBlocker: blocker,
     crashRestartLimit: 2,
   });
@@ -119,6 +121,25 @@ describe("friendlyOutputError", () => {
 });
 
 describe("createOutputManager", () => {
+  test("a primary restart replaces the authorized timing renderer", async () => {
+    const { manager, bridges } = setup({ linkPreload: "link.cjs" });
+    expect(manager.getPrimaryContents()).toBeNull();
+    expect(await manager.start()).toBe(true);
+    const old = manager.getPrimaryContents();
+    expect(old).toBe(bridges[0].renderWindow.webContents);
+    expect(bridges[0].options.webPreferences).toEqual({
+      backgroundThrottling: false,
+      preload: "link.cjs",
+      sandbox: true,
+    });
+    expect(await manager.restart()).toBe(true);
+    expect(bridges[0].disposed).toBe(true);
+    expect(manager.getPrimaryContents()).toBe(bridges[1].renderWindow.webContents);
+    expect(manager.getPrimaryContents()).not.toBe(old);
+    manager.stop();
+    expect(manager.getPrimaryContents()).toBeNull();
+  });
+
   test("starts with the current settings and reports running", async () => {
     const { manager, bridges, blocker } = setup({
       settings: { name: "Main", width: 1280, height: 720 },
@@ -132,6 +153,13 @@ describe("createOutputManager", () => {
     expect(bridges[0].options.width).toBe(1280);
     expect(bridges[0].options.webPreferences.backgroundThrottling).toBe(false);
     expect(blocker.started).toBe(1);
+  });
+
+  test("requests a transparent page when the shared output includes alpha", async () => {
+    const { manager, bridges } = setup({ settings: { includeAlpha: true } });
+    expect(await manager.start()).toBe(true);
+    expect(bridges[0].options.includeAlpha).toBe(true);
+    expect(bridges[0].options.rendererUrl).toBe("http://127.0.0.1:3000/output?primary&alpha");
   });
 
   test("refuses to start when unavailable or without a server", async () => {

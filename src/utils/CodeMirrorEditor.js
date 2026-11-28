@@ -3,17 +3,30 @@
  * Uses CodeMirror 6 with JavaScript mode for syntax highlighting
  */
 
-import { CompletionContext, autocompletion, startCompletion } from "@codemirror/autocomplete";
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import {
+  acceptCompletion,
+  autocompletion,
+  closeCompletion,
+  startCompletion,
+} from "@codemirror/autocomplete";
+import {
+  defaultKeymap,
+  history,
+  historyField,
+  historyKeymap,
+  indentWithTab,
+} from "@codemirror/commands";
 import { javascript } from "@codemirror/lang-javascript";
-import { Compartment, EditorState } from "@codemirror/state";
+import { Compartment, EditorState, Transaction } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { EditorView, highlightActiveLineGutter, keymap, lineNumbers } from "@codemirror/view";
 import { monokai } from "@uiw/codemirror-theme-monokai";
 import { solarizedDark } from "@uiw/codemirror-theme-solarized";
-import hydraData from "../data/hydra-functions.json" assert { type: "json" };
+import { editorDelimiters } from "./editorDelimiters.js";
+import { createEditorExtensions } from "./editorExtensions.js";
 import { insertLines } from "./editorInsert.js";
 import { lightEditorTheme, popEditorTheme } from "./editorThemes.js";
+import { hydraCompletions } from "./hydraCompletions.js";
 import { flashCode, runFlash } from "./runFlash.js";
 
 // Language compartment for JavaScript with Hydra extensions
@@ -69,138 +82,6 @@ const hydraTheme = EditorView.theme({
     fontSize: "12px",
   },
 });
-
-// Generate hydraFunctions from shared JSON data, converting params array to params array of strings for backward compatibility
-const hydraFunctions = Object.fromEntries(
-  Object.entries(hydraData.functions).map(([name, func]) => [
-    name,
-    {
-      description: func.description,
-      params: func.params.map((param) =>
-        param.default ? `${param.name} = ${param.default}` : param.name,
-      ),
-      example: func.example,
-    },
-  ]),
-);
-
-// Add some P5 related functions that aren't in the JSON data
-const p5Functions = {
-  draw: {
-    description: "P5 draw function",
-    params: [],
-  },
-  setup: {
-    description: "P5 setup function",
-    params: [],
-  },
-  mousePressed: {
-    description: "P5 mousePressed event function",
-    params: [],
-  },
-  mouseReleased: {
-    description: "P5 mouseReleased event function",
-    params: [],
-  },
-  mouseMoved: {
-    description: "P5 mouseMoved event function",
-    params: [],
-  },
-};
-
-// Merge hydra functions with P5 functions
-Object.assign(hydraFunctions, p5Functions);
-
-// Create a list of Hydra functions for syntax highlighting
-const hydraKeywords = Object.keys(hydraFunctions);
-
-/**
- * Provide Hydra-specific autocompletions
- * @param {CompletionContext} context - The CodeMirror completion context
- * @returns {Array} Completion options
- */
-function hydraCompletions(context) {
-  // Check for function names
-  const functionMatch = context.matchBefore(/\w*$/);
-  if (functionMatch.from === functionMatch.to && !context.explicit) {
-    return null;
-  }
-
-  // Generate completions for Hydra function names
-  const matchText = functionMatch.text.toLowerCase();
-  const completions = Object.keys(hydraFunctions)
-    .filter((keyword) => keyword.toLowerCase().startsWith(matchText))
-    .map((keyword) => {
-      const funcData = hydraFunctions[keyword];
-      const paramInfo = funcData.params.length > 0 ? `(${funcData.params.join(", ")})` : "()";
-
-      return {
-        label: keyword,
-        type: "function",
-        detail: paramInfo,
-        info: `${funcData.description}`,
-        apply: keyword + "(", // Add opening parenthesis for function call
-        boost: 1,
-      };
-    });
-
-  // Check for method chaining (like .color(), .rotate(), etc.)
-  const methodMatch = context.matchBefore(/\.\w*$/);
-  if (methodMatch && methodMatch.from !== methodMatch.to) {
-    const methodText = methodMatch.text.substring(1).toLowerCase(); // Remove the dot
-    const methodCompletions = Object.keys(hydraFunctions)
-      .filter((keyword) => {
-        // Use syntaxType from JSON data if available, otherwise use legacy exclusion list
-        const funcData = hydraData.functions[keyword];
-        const isMethodOrChainable = funcData
-          ? funcData.syntaxType === "method" || funcData.syntaxType === "property"
-          : // Legacy fallback: exclude known source functions
-            !(
-              keyword === "osc" ||
-              keyword === "noise" ||
-              keyword === "voronoi" ||
-              keyword === "shape" ||
-              keyword === "gradient" ||
-              keyword === "src" ||
-              keyword === "solid"
-            );
-
-        return isMethodOrChainable && keyword.toLowerCase().startsWith(methodText);
-      })
-      .map((keyword) => {
-        const funcData = hydraFunctions[keyword];
-        const paramInfo = funcData.params.length > 0 ? `(${funcData.params.join(", ")})` : "()";
-
-        return {
-          label: keyword,
-          type: "method",
-          detail: paramInfo,
-          info: `${funcData.description} \n\nExample: ${funcData.example} `,
-          apply: keyword + "(", // Add opening parenthesis for function call
-          boost: 1,
-        };
-      });
-
-    if (methodCompletions.length) {
-      return {
-        from: methodMatch.from + 1, // +1 to account for the dot
-        options: methodCompletions,
-        validFor: /^\w*$/,
-      };
-    }
-  }
-
-  // Return function name completions if any match
-  if (completions.length) {
-    return {
-      from: functionMatch.from,
-      options: completions,
-      validFor: /^\w*$/,
-    };
-  }
-
-  return null;
-}
 
 // Set on the editor while files are dragged over it (styles.css)
 const FILE_DROP_CLASS = "cm-file-drop-target";
@@ -320,6 +201,10 @@ export function createCodeMirrorEditor(container, initialCode = "") {
     return themeMapping.default;
   }
 
+  const pluginExtensions = createEditorExtensions((spec) => view.dispatch(spec));
+  const tabHistory = new Map();
+  const historyCompartment = new Compartment();
+
   // Create initial editor state
   const startState = EditorState.create({
     doc: initialCode,
@@ -328,8 +213,21 @@ export function createCodeMirrorEditor(container, initialCode = "") {
       highlightActiveLineGutter(),
       // Our custom Ctrl+Enter keymap comes first for highest priority
       ctrlEnterKeymap,
-      history(), // Add history extension
-      keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
+      history(),
+      historyCompartment.of([]),
+      editorDelimiters,
+      EditorView.domEventObservers({
+        keydown(event, view) {
+          // A completion keymap can consume Escape before CodeMirror's fallback runs.
+          if (event.key === "Escape") view.setTabFocusMode(2000);
+        },
+      }),
+      keymap.of([
+        { key: "Tab", run: acceptCompletion },
+        indentWithTab,
+        ...defaultKeymap,
+        ...historyKeymap,
+      ]),
       languageCompartment.of(javascript()),
       hydraTheme, // Base editor styling
       themeCompartment.of(getCurrentTheme()), // Theme-specific syntax coloring
@@ -337,12 +235,14 @@ export function createCodeMirrorEditor(container, initialCode = "") {
       EditorState.tabSize.of(2),
       runFlash(), // The code lights up for a moment when it runs
       notifyUpdates,
+      pluginExtensions.extension,
       preventCtrlEnterHandler, // Add our custom handler
       // Add autocompletion with custom Hydra completions
       autocompletion({
         override: [hydraCompletions],
         activateOnTyping: true,
         defaultKeymap: true,
+        interactionDelay: 0,
         icons: true,
         closeOnBlur: true,
       }),
@@ -354,6 +254,7 @@ export function createCodeMirrorEditor(container, initialCode = "") {
     state: startState,
     parent: container,
   });
+  const emptyHistory = startState.field(historyField);
 
   // Add custom class for additional styling
   view.dom.classList.add("cm-editor");
@@ -382,7 +283,24 @@ export function createCodeMirrorEditor(container, initialCode = "") {
         changes: { from: 0, to: view.state.doc.length, insert: code },
       });
     },
+    switchTab: (from, to, code) => {
+      closeCompletion(view);
+      tabHistory.set(from, view.state.field(historyField));
+      const incomingHistory = tabHistory.get(to) ?? emptyHistory;
+
+      // Load the document before restoring its history so CodeMirror never
+      // maps the incoming tab's undo and redo positions through the swap.
+      const changeDocument = view.state.update({
+        changes: { from: 0, to: view.state.doc.length, insert: code },
+        annotations: Transaction.addToHistory.of(false),
+      });
+      const restoreHistory = changeDocument.state.update({
+        effects: historyCompartment.reconfigure(historyField.init(() => incomingHistory)),
+      });
+      view.dispatch([changeDocument, restoreHistory]);
+    },
     focus: () => view.focus(),
+    addExtension: pluginExtensions.addExtension,
     // The cursor, as offsets into the code: { anchor, head }
     getSelection: () => {
       const { anchor, head } = view.state.selection.main;

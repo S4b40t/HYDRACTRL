@@ -145,6 +145,7 @@ export function createDesktopMirrorPlugin(options = {}) {
       let frameSize = null;
       let lastFrameAt = 0;
       let lastGood = ctx.getRunningSketch?.() ?? null;
+      let transforms;
       let drawErrorLogged = false;
       let disposed = false;
       const pending = new Map();
@@ -253,9 +254,11 @@ export function createDesktopMirrorPlugin(options = {}) {
           return execute(ctx.hydra, sketch);
         }
         if (result.success) {
-          return result.parameters
-            ? { success: true, runId: id, parameters: result.parameters }
-            : { success: true, runId: id };
+          if (active) transforms = result.transforms;
+          const run = { success: true, runId: id };
+          if (result.parameters) run.parameters = result.parameters;
+          if (result.bandRanges !== undefined) run.bandRanges = result.bandRanges;
+          return run;
         }
         return { success: false, message: result.message || "The output couldn't run the sketch" };
       }
@@ -297,8 +300,10 @@ export function createDesktopMirrorPlugin(options = {}) {
         .catch((error) => console.warn("[desktop-mirror] could not read state:", error));
 
       const offRun = ctx.events.on("sketch:run", (sketch) => {
+        if (!active) transforms = undefined;
         lastGood = { setup: sketch?.setup || "", main: sketch?.main || "" };
         if (sketch?.parameterRun) lastGood.parameterRun = sketch.parameterRun;
+        if (sketch?.bandRanges !== undefined) lastGood.bandRanges = sketch.bandRanges;
       });
 
       const stallTimer = timers.setInterval(() => {
@@ -312,6 +317,7 @@ export function createDesktopMirrorPlugin(options = {}) {
       return {
         api: {
           isActive: () => active,
+          getTransforms: () => (active ? transforms : undefined),
           getStatus: () => ({
             active,
             outputRunning,

@@ -1,0 +1,55 @@
+name: MIDI and Signature Assist Portable
+
+on:
+  push:
+    branches: [integration/portable-midi-signature]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-portable:
+    if: github.ref == 'refs/heads/integration/portable-midi-signature'
+    runs-on: windows-latest
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile
+        working-directory: desktop
+      - run: bun test
+      - run: bun run lint
+      - run: bun run build
+      - run: bun scripts/release.js set-version 1.2.2-portable.midi-signature.1
+      - name: Package Windows x64
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: bunx electron-builder --win --x64 --dir --publish never --config electron-builder.portable.yml
+      - name: Stage archive and test two clean process launches
+        id: portable
+        shell: pwsh
+        run: |
+          $name = node desktop/scripts/stage-portable.mjs desktop/dist/win-unpacked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "name=$name" >> $env:GITHUB_OUTPUT
+          $staging = Join-Path $env:RUNNER_TEMP $name
+          Copy-Item -Recurse desktop/dist/win-unpacked $staging
+          Compress-Archive -Path $staging -DestinationPath "$name.zip"
+          (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower() + "  $name.zip" | Set-Content "$name.zip.sha256"
+          node desktop/scripts/portable-restart-smoke.mjs (Join-Path $staging "HYDRACTRL.exe")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ${{ steps.portable.outputs.name }}
+          path: |
+            ${{ steps.portable.outputs.name }}.zip
+            ${{ steps.portable.outputs.name }}.zip.sha256
+          if-no-files-found: error

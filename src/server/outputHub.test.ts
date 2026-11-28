@@ -37,6 +37,62 @@ describe("parseIncomingMessage", () => {
     expect(parseIncomingMessage(SKETCH)).toEqual(SKETCH);
   });
 
+  test("copies display metadata from a successful primary result", () => {
+    const result = {
+      type: "result",
+      id: RUN.id,
+      success: true,
+      transforms: {
+        fold: {
+          type: "coord",
+          glsl: "ignored shader source",
+          inputs: [
+            { name: "amount", default: 0.5 },
+            { name: "input", default: [1, 2] },
+          ],
+        },
+        invalid: { type: "unknown", inputs: [] },
+        malformed: { type: "coord", inputs: [{ name: 1 }] },
+      },
+    };
+    expect(parseIncomingMessage(result)).toEqual({
+      type: "result",
+      id: RUN.id,
+      success: true,
+      transforms: {
+        fold: { type: "coord", inputs: [{ name: "amount", default: 0.5 }, { name: "input" }] },
+      },
+    });
+    expect(parseIncomingMessage({ ...result, success: false })).toEqual({
+      type: "result",
+      id: RUN.id,
+      success: false,
+    });
+  });
+
+  test("validates optional range baselines on sketch and successful result messages", () => {
+    const bandRanges = [
+      [50, 150],
+      [20, 80],
+      [50, 150],
+    ];
+    const parameters = [
+      { name: "Level", min: 0, max: 1, default: 0.5, smoothing: 0, curve: 1, takeover: true },
+    ];
+    const result = { type: "result", id: RUN.id, success: true, bandRanges, parameters };
+    expect(parseIncomingMessage(result)).toEqual(result);
+    const sketch = { ...SKETCH, bandRanges, parameterRun: "midi-r2" };
+    expect(parseIncomingMessage(sketch)).toEqual(sketch);
+    expect(parseIncomingMessage({ ...sketch, bandRanges: null })).toEqual({
+      ...sketch,
+      bandRanges: null,
+    });
+    for (const invalid of [[], [[0, Number.NaN]], [[90, 20]], [[2, 2]], [[-1, 2]]]) {
+      expect(parseIncomingMessage({ ...result, bandRanges: invalid })).toBeNull();
+      expect(parseIncomingMessage({ ...sketch, bandRanges: invalid })).toBeNull();
+    }
+  });
+
   test("defaults a missing setup to an empty string", () => {
     expect(parseIncomingMessage({ type: "sketch", main: "osc().out()" })).toEqual({
       type: "sketch",

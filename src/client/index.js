@@ -14,12 +14,14 @@ import { createPluginHost } from "./core/PluginHost.js";
 import { createSafeStorage } from "./core/Storage.js";
 import { createAudioInputs } from "./core/audioInput.js";
 import { createEditorTabs } from "./core/editorTabs.js";
+import { installLinkClient } from "./core/linkClient.js";
 import { notify, notifyError } from "./core/notify.js";
 import { createParameterMappings } from "./core/parameterMappings.js";
 import { runWithRecovery } from "./core/primaryRunner.js";
 import { createRenderLoop } from "./core/renderLoop.js";
 import { applySketchParameters, executeSketch } from "./core/sketchRunner.js";
 import { nextUiAction } from "./core/uiCycle.js";
+import { createAbletonLinkPlugin } from "./plugins/AbletonLinkPlugin.js";
 import { createAudioInputPlugin } from "./plugins/AudioInputPlugin.js";
 import { createAudioWatchdogPlugin } from "./plugins/AudioWatchdogPlugin.js";
 import { createAutoRunPlugin } from "./plugins/AutoRunPlugin.js";
@@ -33,6 +35,7 @@ import { createInfoPanelPlugin } from "./plugins/InfoPanelPlugin.js";
 import { createMidiUiPlugin } from "./plugins/MidiUiPlugin.js";
 import { createMobileUiPlugin } from "./plugins/MobileUiPlugin.js";
 import { createOutputSyncPlugin } from "./plugins/OutputSyncPlugin.js";
+import { createSignatureAssistPlugin } from "./plugins/SignatureAssistPlugin.js";
 import { createSlotAdvancePlugin } from "./plugins/SlotAdvancePlugin.js";
 import { createUrlSharePlugin, readSketchFromHash } from "./plugins/UrlSharePlugin.js";
 
@@ -209,6 +212,9 @@ function initEditor() {
       }
     },
     focus: () => editor.focus(),
+    addExtension: editor.addExtension,
+    getCurrentTab: tabs.current,
+    getTabCode: tabs.getTabCode,
     // The code lights up to show it ran; the code overlay flashes with it
     flash: () => {
       editor.flash();
@@ -363,11 +369,10 @@ async function runCode(
     // Shared with the output page so every render head runs sketches identically
     const isMain = hydra === window.mainHydra;
     const sameSketch = runningSketch?.setup === setupCode && runningSketch?.main === mainCode;
-    const sketch = {
-      setup: setupCode,
-      main: mainCode,
-      parameterRun: !isMain && sameSketch ? runningSketch.parameterRun : nextParameterRun(),
-    };
+    const sketch =
+      !isMain && sameSketch
+        ? runningSketch
+        : { setup: setupCode, main: mainCode, parameterRun: nextParameterRun() };
     if (!isMain) {
       const result = await executeSketch(hydra, sketch);
       if (!result.success) throw new Error(result.message);
@@ -383,13 +388,15 @@ async function runCode(
         : await runWithRecovery(hydra, sketch, runningSketch);
       if (!result.success) throw new Error(result.message);
 
-      runningSketch = result.runId ? { ...sketch, runId: result.runId } : sketch;
+      runningSketch = { ...sketch };
+      if (result.runId) runningSketch.runId = result.runId;
+      if (result.bandRanges !== undefined) runningSketch.bandRanges = result.bandRanges;
       parameters.activate(sketch.parameterRun, slot, result.parameters);
       events.emit("sketch:run", runningSketch);
 
       const breakout = window.breakoutHydra;
       if (includeBreakout && breakout && !window.breakoutWindow?.closed) {
-        const breakoutResult = await executeSketch(breakout, sketch);
+        const breakoutResult = await executeSketch(breakout, runningSketch);
         if (breakoutResult.success) applySketchParameters(breakout, parameters.snapshot(), true);
         else showErrorNotification(breakoutResult.message);
       }
@@ -589,9 +596,15 @@ async function init() {
     const tablet = isTablet();
 
     const editor = initEditor(); // No longer async
+    const link = installLinkClient(window);
     const hydra = await initHydra();
     const renderLoop = createRenderLoop((dt) => hydra.tick(dt));
     renderLoop.start();
+    window.addEventListener("pagehide", (event) => {
+      if (event.persisted) return;
+      renderLoop.stop();
+      audioInputs.dispose();
+    });
 
     // Apply UI visibility state from localStorage right after panels are created.
     // Only applies when explicitly hidden, so first-time users see the UI.
@@ -911,9 +924,16 @@ async function init() {
     pluginHost.register(createDesktopOutputPlugin());
     pluginHost.register(createDesktopMirrorPlugin());
     pluginHost.register(createDesktopMediaPlugin());
+    if (link) pluginHost.register(createAbletonLinkPlugin(link));
     pluginHost.register(createCodeOverlayPlugin());
     pluginHost.register(createMidiUiPlugin());
     pluginHost.register(createMobileUiPlugin());
+    pluginHost.register(
+      createSignatureAssistPlugin({
+        link: link?.api,
+        getPrimaryTransforms: () => pluginHost.getApi("desktop-mirror")?.getTransforms(),
+      }),
+    );
     pluginHost.init();
 
     // Public extension point: external code (console, userscripts, future

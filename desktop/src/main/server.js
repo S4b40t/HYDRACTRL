@@ -13,6 +13,7 @@
  *
  * Everything platform-specific (spawn, fetch, timers, clock) is injected.
  */
+import { randomUUID } from "node:crypto";
 import { describeError } from "./log.js";
 
 export const SERVER_STATUS = Object.freeze({
@@ -33,7 +34,7 @@ export function isConnectionRefused(error) {
  * What is listening on a port: "hydractrl" (a HYDRACTRL server), "busy"
  * (something else, or unknown), or "free" (nothing).
  */
-export async function probeServer(fetchImpl, port, timeoutMs = 1500) {
+export async function probeServer(fetchImpl, port, timeoutMs = 1500, instanceId = undefined) {
   try {
     const signal =
       typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
@@ -47,7 +48,9 @@ export async function probeServer(fetchImpl, port, timeoutMs = 1500) {
       const type = response.headers.get("content-type") || "";
       if (type.includes("application/json")) {
         const body = await response.json();
-        if (body && body.name === "hydractrl") return "hydractrl";
+        if (body?.name === "hydractrl" && (!instanceId || body.instanceId === instanceId)) {
+          return "hydractrl";
+        }
       }
     }
     return "busy";
@@ -61,6 +64,8 @@ const defaultTimers = { setTimeout, clearTimeout, setInterval, clearInterval };
 export function createServerManager({
   port,
   allowNetwork = false,
+  fixedOrigin = false,
+  attachExisting = true,
   command,
   spawn,
   fetch: fetchImpl,
@@ -223,7 +228,7 @@ export function createServerManager({
     scheduleRestart(reason);
   }
 
-  async function waitReady(p, exited) {
+  async function waitReady(p, exited, instanceId) {
     const deadline = now() + readyTimeoutMs;
     let exitResult = null;
     exited.then((result) => {
@@ -236,7 +241,7 @@ export function createServerManager({
           : `exited with code ${exitResult.code ?? exitResult.signal} before it was ready`;
         throw new Error(`server ${detail}`);
       }
-      if ((await probeServer(fetchImpl, p)) === "hydractrl") return true;
+      if ((await probeServer(fetchImpl, p, 1500, instanceId)) === "hydractrl") return true;
       if (now() > deadline) {
         await killChild(child);
         throw new Error(`server did not become ready within ${Math.round(readyTimeoutMs / 1000)}s`);
@@ -251,6 +256,7 @@ export function createServerManager({
     if (command.prepare) await runPrepare(command.prepare);
     if (stopping) return;
 
+    const instanceId = fixedOrigin ? randomUUID() : undefined;
     const env = {
       ...baseEnv,
       ...(command.env || {}),
@@ -263,6 +269,7 @@ export function createServerManager({
         allowNetwork ? "all interfaces" : "this computer only"
       })`,
     );
+    if (instanceId) env.HYDRACTRL_INSTANCE_ID = instanceId;
     const proc = spawn(command.file, command.args, {
       cwd: command.cwd,
       env,
@@ -278,7 +285,7 @@ export function createServerManager({
     const exited = waitForExit(proc);
     exited.then((result) => onChildExit(proc, result));
 
-    const ready = await waitReady(p, exited);
+    const ready = await waitReady(p, exited, instanceId);
     if (ready) {
       set({ status: SERVER_STATUS.ready, error: null, since: now() });
       log.info(`server ready at ${urlFor(p)}`);
@@ -316,11 +323,15 @@ export function createServerManager({
     try {
       set({ status: SERVER_STATUS.probing, error: null });
       const found = await probeServer(fetchImpl, port);
-      if (found === "hydractrl") {
+      if (fixedOrigin) {
+        if (found !== "free")
+          throw new Error(`Portable needs port ${port}. Close the program using it and retry.`);
+        await launch(port);
+      } else if (found === "hydractrl" && attachExisting) {
         attach(port);
       } else {
         let chosen = port;
-        if (found === "busy") {
+        if (found === "busy" || found === "hydractrl") {
           chosen = await findFreePort(port + 1);
           log.warn(`port ${port} is taken by another program; using port ${chosen} instead`);
         }
